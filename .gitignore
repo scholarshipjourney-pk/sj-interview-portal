@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Local Netlify data (dev blobs, cache, etc.)
+.netlify/
+
+# Environment secrets — NEVER commit this
+.env
+
+# OS clutter
+.DS_Store
+Thumbs.db
+
+# Editor folders
+.vscode/
+.idea/
