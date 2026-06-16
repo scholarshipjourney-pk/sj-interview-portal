@@ -47,12 +47,21 @@ export default function Instructions({ email, onStart }) {
   const [camStream, setCamStream] = useState(null)
   const videoRef = useRef(null)
 
+  const bothGranted = camGranted && micGranted
+
   // Clean up camera stream on unmount
   useEffect(() => {
     return () => {
       if (camStream) camStream.getTracks().forEach((t) => t.stop())
     }
   }, [camStream])
+
+  // FIX: Attach stream to the video element AFTER React finishes rendering it
+  useEffect(() => {
+    if (bothGranted && camStream && videoRef.current) {
+      videoRef.current.srcObject = camStream
+    }
+  }, [bothGranted, camStream])
 
   const requestPermissions = async () => {
     setRequesting(true)
@@ -67,11 +76,7 @@ export default function Instructions({ email, onStart }) {
       setCamGranted(true)
       setMicGranted(true)
       setCamStream(stream)
-
-      // Show camera preview
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-      }
+      // Removed the immediate srcObject assignment here to fix the timing bug
     } catch (err) {
       if (err.name === 'NotAllowedError') {
         setPermError(
@@ -88,8 +93,6 @@ export default function Instructions({ email, onStart }) {
       setRequesting(false)
     }
   }
-
-  const bothGranted = camGranted && micGranted
 
   return (
     <div className="page" style={{ padding: '24px 16px', alignItems: 'center' }}>
