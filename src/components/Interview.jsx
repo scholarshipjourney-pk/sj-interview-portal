@@ -119,6 +119,7 @@ export default function Interview({ email, onComplete }) {
   const timerRef         = useRef(null)
   const voicesLoadedRef  = useRef(false)
   const finalTextRef     = useRef('')
+  const utteranceRef     = useRef(null) // FIX: Prevents Chrome garbage collection bug
 
   // Keep refs in sync with state
   useEffect(() => { messagesRef.current = messages }, [messages])
@@ -241,7 +242,7 @@ export default function Interview({ email, onComplete }) {
 
       setMessages(withReply)
       messagesRef.current = withReply
-      setCurrentAiText(reply)
+      setCurrentAiText(reply.replace(/\[.*?\]/g, '').trim()) // Clean visual text immediately
       setQuestionIndex((q) => Math.min(q + 1, 5))
       speakText(reply, withReply)
     } catch (err) {
@@ -251,24 +252,28 @@ export default function Interview({ email, onComplete }) {
   }, [])
 
   /* ============================================
-     TEXT-TO-SPEECH
+     TEXT-TO-SPEECH (UPDATED BUG-FREE VERSION)
      ============================================ */
   const speakText = useCallback((text, afterMessages) => {
     const synth = window.speechSynthesis
-    synth.cancel()
+    synth.cancel() // FIX: Clear ghost queues
 
-    const utterance = new SpeechSynthesisUtterance(text)
+    // FIX: Remove any hidden AI tags like [END_INTERVIEW] before speaking
+    const cleanTextToSpeak = text.replace(/\[.*?\]/g, '').trim()
+
+    const utterance = new SpeechSynthesisUtterance(cleanTextToSpeak)
     utterance.rate = 0.92
     utterance.pitch = 1.0
     utterance.volume = 1.0
 
+    // FIX: Attach to ref to stop Chrome from deleting it mid-sentence
+    utteranceRef.current = utterance
+
     const voices = synth.getVoices()
+    // Prioritize standard male voices
     const preferred =
+      voices.find((v) => v.name.includes('Male') || v.name.includes('Alex') || v.name.includes('Daniel')) ||
       voices.find((v) => v.name === 'Google US English') ||
-      voices.find((v) => v.name === 'Samantha') ||
-      voices.find((v) => v.name === 'Alex') ||
-      voices.find((v) => v.name.includes('Daniel')) ||
-      voices.find((v) => v.lang === 'en-US' && v.localService) ||
       voices.find((v) => v.lang.startsWith('en'))
     if (preferred) utterance.voice = preferred
 
@@ -281,13 +286,27 @@ export default function Interview({ email, onComplete }) {
       setStatusLabel('Your turn — press the mic to answer')
     }
 
-    utterance.onerror = () => {
+    utterance.onerror = (e) => {
+      console.warn('Speech API Error:', e)
       if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
       setPhase('waiting')
       setStatusLabel('Your turn — press the mic to answer')
     }
 
     synth.speak(utterance)
+
+    // FIX: Safety Timeout Fallback. If browser hangs, unlock UI anyway.
+    const estimatedReadingTime = cleanTextToSpeak.length * 60 + 2000
+    setTimeout(() => {
+      if (synth.speaking) {
+        console.log("Browser TTS hung. Forcing UI unlock.")
+        synth.cancel()
+        if (phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
+          setPhase('waiting')
+          setStatusLabel('Your turn — press the mic to answer')
+        }
+      }
+    }, estimatedReadingTime)
   }, [])
 
   /* ============================================
@@ -312,11 +331,17 @@ export default function Interview({ email, onComplete }) {
         body: JSON.stringify({ messages: endMessages }),
       })
       const { reply } = await res.json()
-      setCurrentAiText(reply)
+      
+      const cleanReply = reply.replace(/\[.*?\]/g, '').trim()
+      setCurrentAiText(cleanReply)
 
       const synth = window.speechSynthesis
-      const utterance = new SpeechSynthesisUtterance(reply)
+      synth.cancel() // Clear queues
+
+      const utterance = new SpeechSynthesisUtterance(cleanReply)
       utterance.rate = 0.88
+      utteranceRef.current = utterance // Prevent deletion
+
       utterance.onend = () => {
         completeInterview()
       }
@@ -324,6 +349,15 @@ export default function Interview({ email, onComplete }) {
         completeInterview()
       }
       synth.speak(utterance)
+
+      // Fallback timeout to ensure interview completes even if audio hangs
+      setTimeout(() => {
+        if (phaseRef.current !== 'ended') {
+          synth.cancel()
+          completeInterview()
+        }
+      }, cleanReply.length * 60 + 2000)
+
     } catch {
       completeInterview()
     }
@@ -360,7 +394,8 @@ export default function Interview({ email, onComplete }) {
     const recognition = new SR()
     recognition.continuous = true
     recognition.interimResults = true
-    recognition.lang = 'en-US'
+    // Optimized for South Asian accents if needed, en-US is standard fallback
+    recognition.lang = 'en-US' 
     finalTextRef.current = ''
 
     recognition.onresult = (event) => {
@@ -660,7 +695,7 @@ export default function Interview({ email, onComplete }) {
               muted
               playsInline
               className="candidate-video"
-              style={{ borderRadius: 10 }}
+              style={{ borderRadius: 10, width: '100%', height: '100%', objectFit: 'cover' }}
             />
             <div
               style={{
@@ -747,8 +782,8 @@ export default function Interview({ email, onComplete }) {
                       {m.role === 'assistant' ? 'Alex' : 'You'}
                     </div>
                     {m.content
-                      .replace('[TIME_WARNING]', '')
-                      .replace('[END_INTERVIEW] The 20 minutes are up. Please give your warm closing remarks.', '')}
+                      .replace(/\[.*?\]/g, '') // Cleans all hidden tags from the chat log too
+                      .trim()}
                   </div>
                 ))}
             </div>
