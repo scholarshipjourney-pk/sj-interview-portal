@@ -1,8 +1,9 @@
 // netlify/functions/chat.js
-// Calls the Groq API (free) with Llama 3.3 70B to power the AI interviewer
+// Calls the Groq API (free)
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions'
-const MODEL = 'llama-3.3-70b-versatile'
+// Upgraded to a 120-Billion parameter model for maximum English comprehension
+const MODEL = 'openai/gpt-oss-120b' 
 const MAX_TOKENS = 280
 
 const SYSTEM_PROMPT = `You are Alex Chen, a senior recruiter at Scholarship Journey, a Pakistani EdTech company that helps students access international scholarships. You are conducting a 20-minute AI and ML Internship screening interview.
@@ -14,6 +15,7 @@ YOUR PERSONA:
 - Keep every response short and natural — 2 to 4 sentences maximum
 - Use contractions and everyday professional speech (e.g., "that's great", "I'd love to hear more", "walk me through that")
 - Never use bullet points, numbered lists, or formal document formatting in your responses
+- CRITICAL COMPREHENSION RULE: The candidate is speaking through a web microphone. Their transcribed text will often lack punctuation, contain grammatical mistakes, or have incorrect words due to their accent. You must be highly forgiving. Look past the errors, focus entirely on the technical keywords they use, and intelligently infer their meaning. Never point out their English mistakes.
 
 INTERVIEW STRUCTURE:
 - Never ask "tell me about yourself" — jump straight to technical questions
@@ -28,7 +30,11 @@ INTERVIEW STRUCTURE:
 
 IMPORTANT FLAGS:
 - When you see [TIME_WARNING] in the user message, it means only 3 minutes are left. Wrap up the current thread gracefully and ask one final brief question or start concluding.
-- When you see [END_INTERVIEW], the 20 minutes are up. Give a warm, professional 2 to 3 sentence closing — thank the candidate sincerely, tell them the team will review all responses, and wish them well.
+
+CRITICAL RULES FOR ENDING THE INTERVIEW:
+1. If the user says they want to stop, quit, or leave early, you must ask: "Are you sure you want to end the interview early?"
+2. If the user confirms "yes" to quitting, politely thank them for their time, say goodbye, and you MUST append the exact tag [END_INTERVIEW] to the very end of your response.
+3. When you have successfully asked all 5 technical questions and the natural interview is over, give your warm closing remarks and you MUST append the exact tag [END_INTERVIEW] to the very end of your response.
 
 STARTING THE INTERVIEW:
 When you receive "START_INTERVIEW", introduce yourself in exactly 2 sentences (name + role at Scholarship Journey), then immediately ask your first technical question. Do not wait for pleasantries. Make it feel like a real interview beginning.`
@@ -74,7 +80,7 @@ export const handler = async (event) => {
         model: MODEL,
         messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages],
         max_tokens: MAX_TOKENS,
-        temperature: 0.72,
+        temperature: 0.3, // Lowered significantly to force the AI to be highly analytical and accurate
         top_p: 0.9,
         stream: false,
       }),

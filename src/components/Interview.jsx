@@ -211,107 +211,25 @@ export default function Interview({ email, onComplete }) {
   }, [])
 
   /* ============================================
-     CORE AI CALL
+     END INTERVIEW FLOW (Moved up for React constraints)
      ============================================ */
-  const callAI = useCallback(async (userContent, currentMessages) => {
-    setPhase('processing')
-    setStatusLabel('Alex is thinking...')
-
-    let content = userContent
-    if (warningFiredRef.current && !content.includes('[TIME_WARNING]') && content !== 'START_INTERVIEW') {
-      content = `${content} [TIME_WARNING]`
-    }
-
-    const newMsg = { role: 'user', content }
-    const updated = userContent === 'START_INTERVIEW' ? [newMsg] : [...currentMessages, newMsg]
-
-    setMessages(updated)
-    messagesRef.current = updated
+  const completeInterview = useCallback(async () => {
+    setPhase('ended')
+    setStatusLabel('Interview complete')
 
     try {
-      const res = await fetch('/api/chat', {
+      await fetch('/api/complete-interview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: updated }),
+        body: JSON.stringify({ email, disqualified: disqualifiedRef.current }),
       })
-
-      if (!res.ok) throw new Error('API error')
-
-      const { reply } = await res.json()
-      const withReply = [...updated, { role: 'assistant', content: reply }]
-
-      setMessages(withReply)
-      messagesRef.current = withReply
-      setCurrentAiText(reply.replace(/\[.*?\]/g, '').trim()) // Clean visual text immediately
-      setQuestionIndex((q) => Math.min(q + 1, 5))
-      speakText(reply, withReply)
-    } catch (err) {
-      setStatusLabel('Connection issue. Please try again.')
-      setPhase('waiting')
-    }
-  }, [])
-
-  /* ============================================
-     TEXT-TO-SPEECH (UPDATED BUG-FREE VERSION)
-     ============================================ */
-  const speakText = useCallback((text, afterMessages) => {
-    const synth = window.speechSynthesis
-    synth.cancel() // FIX: Clear ghost queues
-
-    // FIX: Remove any hidden AI tags like [END_INTERVIEW] before speaking
-    const cleanTextToSpeak = text.replace(/\[.*?\]/g, '').trim()
-
-    const utterance = new SpeechSynthesisUtterance(cleanTextToSpeak)
-    utterance.rate = 0.92
-    utterance.pitch = 1.0
-    utterance.volume = 1.0
-
-    // FIX: Attach to ref to stop Chrome from deleting it mid-sentence
-    utteranceRef.current = utterance
-
-    const voices = synth.getVoices()
-    // Prioritize standard male voices
-    const preferred =
-      voices.find((v) => v.name.includes('Male') || v.name.includes('Alex') || v.name.includes('Daniel')) ||
-      voices.find((v) => v.name === 'Google US English') ||
-      voices.find((v) => v.lang.startsWith('en'))
-    if (preferred) utterance.voice = preferred
-
-    setPhase('ai_speaking')
-    setStatusLabel('Alex is speaking...')
-
-    utterance.onend = () => {
-      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
-      setPhase('waiting')
-      setStatusLabel('Your turn — press the mic to answer')
+    } catch {
+      // Best effort
     }
 
-    utterance.onerror = (e) => {
-      console.warn('Speech API Error:', e)
-      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
-      setPhase('waiting')
-      setStatusLabel('Your turn — press the mic to answer')
-    }
+    setTimeout(() => onComplete(), 1800)
+  }, [email, onComplete])
 
-    synth.speak(utterance)
-
-    // FIX: Safety Timeout Fallback. If browser hangs, unlock UI anyway.
-    const estimatedReadingTime = cleanTextToSpeak.length * 60 + 2000
-    setTimeout(() => {
-      if (synth.speaking) {
-        console.log("Browser TTS hung. Forcing UI unlock.")
-        synth.cancel()
-        if (phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
-          setPhase('waiting')
-          setStatusLabel('Your turn — press the mic to answer')
-        }
-      }
-    }, estimatedReadingTime)
-  }, [])
-
-  /* ============================================
-     END INTERVIEW FLOW
-     ============================================ */
   const triggerEnd = useCallback(async () => {
     if (recognitionRef.current) recognitionRef.current.stop()
     window.speechSynthesis?.cancel()
@@ -350,7 +268,7 @@ export default function Interview({ email, onComplete }) {
       }
       synth.speak(utterance)
 
-      // Fallback timeout to ensure interview completes even if audio hangs
+      // Fallback timeout
       setTimeout(() => {
         if (phaseRef.current !== 'ended') {
           synth.cancel()
@@ -361,24 +279,121 @@ export default function Interview({ email, onComplete }) {
     } catch {
       completeInterview()
     }
-  }, [])
+  }, [completeInterview])
 
-  const completeInterview = useCallback(async () => {
-    setPhase('ended')
-    setStatusLabel('Interview complete')
+  /* ============================================
+     TEXT-TO-SPEECH (UPDATED WITH EARLY QUIT LOGIC)
+     ============================================ */
+  const speakText = useCallback((text, afterMessages) => {
+    const synth = window.speechSynthesis
+    synth.cancel() // Clear ghost queues
 
-    try {
-      await fetch('/api/complete-interview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, disqualified: disqualifiedRef.current }),
-      })
-    } catch {
-      // Best effort
+    // 1. Check if the AI decided to end the interview early or naturally
+    const isEndingNow = text.includes('[END_INTERVIEW]')
+
+    // 2. Remove hidden tags before speaking
+    const cleanTextToSpeak = text.replace(/\[.*?\]/g, '').trim()
+
+    const utterance = new SpeechSynthesisUtterance(cleanTextToSpeak)
+    utterance.rate = 0.92
+    utterance.pitch = 1.0
+    utterance.volume = 1.0
+
+    utteranceRef.current = utterance
+
+    const voices = synth.getVoices()
+    const preferred =
+      voices.find((v) => v.name.includes('Male') || v.name.includes('Alex') || v.name.includes('Daniel')) ||
+      voices.find((v) => v.name === 'Google US English') ||
+      voices.find((v) => v.lang.startsWith('en'))
+    if (preferred) utterance.voice = preferred
+
+    setPhase('ai_speaking')
+    setStatusLabel('Alex is speaking...')
+
+    utterance.onend = () => {
+      // 3. Trigger close interview if AI said goodbye
+      if (isEndingNow) {
+        completeInterview()
+        return
+      }
+
+      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
+      setPhase('waiting')
+      setStatusLabel('Your turn — press the mic to answer')
     }
 
-    setTimeout(() => onComplete(), 1800)
-  }, [email, onComplete])
+    utterance.onerror = (e) => {
+      console.warn('Speech API Error:', e)
+      if (isEndingNow) {
+        completeInterview()
+        return
+      }
+
+      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
+      setPhase('waiting')
+      setStatusLabel('Your turn — press the mic to answer')
+    }
+
+    synth.speak(utterance)
+
+    // Safety Timeout Fallback
+    const estimatedReadingTime = cleanTextToSpeak.length * 60 + 2000
+    setTimeout(() => {
+      if (synth.speaking) {
+        console.log("Browser TTS hung. Forcing UI unlock.")
+        synth.cancel()
+
+        if (isEndingNow) {
+          completeInterview()
+        } else if (phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
+          setPhase('waiting')
+          setStatusLabel('Your turn — press the mic to answer')
+        }
+      }
+    }, estimatedReadingTime)
+  }, [completeInterview])
+
+  /* ============================================
+     CORE AI CALL
+     ============================================ */
+  const callAI = useCallback(async (userContent, currentMessages) => {
+    setPhase('processing')
+    setStatusLabel('Alex is thinking...')
+
+    let content = userContent
+    if (warningFiredRef.current && !content.includes('[TIME_WARNING]') && content !== 'START_INTERVIEW') {
+      content = `${content} [TIME_WARNING]`
+    }
+
+    const newMsg = { role: 'user', content }
+    const updated = userContent === 'START_INTERVIEW' ? [newMsg] : [...currentMessages, newMsg]
+
+    setMessages(updated)
+    messagesRef.current = updated
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: updated }),
+      })
+
+      if (!res.ok) throw new Error('API error')
+
+      const { reply } = await res.json()
+      const withReply = [...updated, { role: 'assistant', content: reply }]
+
+      setMessages(withReply)
+      messagesRef.current = withReply
+      setCurrentAiText(reply.replace(/\[.*?\]/g, '').trim()) // Clean visual text immediately
+      setQuestionIndex((q) => Math.min(q + 1, 5))
+      speakText(reply, withReply)
+    } catch (err) {
+      setStatusLabel('Connection issue. Please try again.')
+      setPhase('waiting')
+    }
+  }, [speakText])
 
   /* ============================================
      SPEECH RECOGNITION
@@ -394,7 +409,6 @@ export default function Interview({ email, onComplete }) {
     const recognition = new SR()
     recognition.continuous = true
     recognition.interimResults = true
-    // Optimized for South Asian accents if needed, en-US is standard fallback
     recognition.lang = 'en-US' 
     finalTextRef.current = ''
 
