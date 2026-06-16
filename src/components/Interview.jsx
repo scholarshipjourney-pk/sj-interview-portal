@@ -119,7 +119,7 @@ export default function Interview({ email, onComplete }) {
   const timerRef         = useRef(null)
   const voicesLoadedRef  = useRef(false)
   const finalTextRef     = useRef('')
-  const utteranceRef     = useRef(null) // FIX: Prevents Chrome garbage collection bug
+  const utteranceRef     = useRef(null)
 
   // Keep refs in sync with state
   useEffect(() => { messagesRef.current = messages }, [messages])
@@ -136,7 +136,7 @@ export default function Interview({ email, onComplete }) {
         })
         if (videoRef.current) videoRef.current.srcObject = stream
       } catch (err) {
-        // Camera unavailable: interview still proceeds
+        // Camera unavailable
       }
     }
     initCamera()
@@ -211,7 +211,7 @@ export default function Interview({ email, onComplete }) {
   }, [])
 
   /* ============================================
-     END INTERVIEW FLOW (Moved up for React constraints)
+     END INTERVIEW FLOW
      ============================================ */
   const completeInterview = useCallback(async () => {
     setPhase('ended')
@@ -266,7 +266,11 @@ export default function Interview({ email, onComplete }) {
       utterance.onerror = () => {
         completeInterview()
       }
-      synth.speak(utterance)
+
+      // FIX: 100ms delay to prevent Chrome from muting the audio
+      setTimeout(() => {
+        synth.speak(utterance)
+      }, 100)
 
       // Fallback timeout
       setTimeout(() => {
@@ -282,16 +286,13 @@ export default function Interview({ email, onComplete }) {
   }, [completeInterview])
 
   /* ============================================
-     TEXT-TO-SPEECH (UPDATED WITH EARLY QUIT LOGIC)
+     TEXT-TO-SPEECH (UPDATED WITH AUDIO MUTING FIX)
      ============================================ */
   const speakText = useCallback((text, afterMessages) => {
     const synth = window.speechSynthesis
     synth.cancel() // Clear ghost queues
 
-    // 1. Check if the AI decided to end the interview early or naturally
     const isEndingNow = text.includes('[END_INTERVIEW]')
-
-    // 2. Remove hidden tags before speaking
     const cleanTextToSpeak = text.replace(/\[.*?\]/g, '').trim()
 
     const utterance = new SpeechSynthesisUtterance(cleanTextToSpeak)
@@ -312,12 +313,10 @@ export default function Interview({ email, onComplete }) {
     setStatusLabel('Alex is speaking...')
 
     utterance.onend = () => {
-      // 3. Trigger close interview if AI said goodbye
       if (isEndingNow) {
         completeInterview()
         return
       }
-
       if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
       setPhase('waiting')
       setStatusLabel('Your turn — press the mic to answer')
@@ -329,13 +328,15 @@ export default function Interview({ email, onComplete }) {
         completeInterview()
         return
       }
-
       if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
       setPhase('waiting')
       setStatusLabel('Your turn — press the mic to answer')
     }
 
-    synth.speak(utterance)
+    // FIX: 100ms delay forces the browser to finish canceling before trying to speak
+    setTimeout(() => {
+      synth.speak(utterance)
+    }, 100)
 
     // Safety Timeout Fallback
     const estimatedReadingTime = cleanTextToSpeak.length * 60 + 2000
@@ -351,7 +352,7 @@ export default function Interview({ email, onComplete }) {
           setStatusLabel('Your turn — press the mic to answer')
         }
       }
-    }, estimatedReadingTime)
+    }, estimatedReadingTime + 100)
   }, [completeInterview])
 
   /* ============================================
@@ -386,7 +387,7 @@ export default function Interview({ email, onComplete }) {
 
       setMessages(withReply)
       messagesRef.current = withReply
-      setCurrentAiText(reply.replace(/\[.*?\]/g, '').trim()) // Clean visual text immediately
+      setCurrentAiText(reply.replace(/\[.*?\]/g, '').trim()) 
       setQuestionIndex((q) => Math.min(q + 1, 5))
       speakText(reply, withReply)
     } catch (err) {
