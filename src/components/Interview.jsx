@@ -17,13 +17,10 @@ function cleanText(text) {
 function getMaleVoice() {
   const voices = window.speechSynthesis.getVoices()
   return (
+    voices.find(v => v.name.includes('Male') || v.name.includes('Alex') || v.name.includes('Daniel') || v.name.includes('David')) ||
+    voices.find(v => v.name === 'Google US English') ||
     voices.find(v => v.name === 'Google UK English Male') ||
     voices.find(v => v.name === 'Microsoft David Desktop - English (United States)') ||
-    voices.find(v => v.name === 'Microsoft David - English (United States)') ||
-    voices.find(v => v.name === 'Microsoft Mark - English (United States)') ||
-    voices.find(v => v.name.toLowerCase().includes('david') && v.lang.startsWith('en')) ||
-    voices.find(v => v.name.toLowerCase().includes('mark') && v.lang.startsWith('en')) ||
-    voices.find(v => v.name.toLowerCase().includes('james') && v.lang.startsWith('en')) ||
     voices.find(v =>
       v.lang === 'en-US' &&
       v.localService &&
@@ -121,7 +118,6 @@ export default function Interview({ email, onComplete }) {
   const timeLeftRef     = useRef(TOTAL_SECONDS)
   const warningFiredRef = useRef(false)
   const endingFiredRef  = useRef(false)
-  const violationsRef   = useRef(0)
   const disqualifiedRef = useRef(false)
   const closedEarlyRef  = useRef(false)
   const recognitionRef  = useRef(null)
@@ -159,161 +155,37 @@ export default function Interview({ email, onComplete }) {
     }
   }, [])
 
-  // ---- Tab change = END interview immediately ----
-  useEffect(() => {
-    const onHide = () => {
-      if (!document.hidden) return
-      if (phaseRef.current === 'ended' || phaseRef.current === 'ending') return
-      closedEarlyRef.current  = true
-      disqualifiedRef.current = true
-      if (!endingFiredRef.current) {
-        endingFiredRef.current = true
-        clearInterval(timerRef.current)
-        window.speechSynthesis?.cancel()
-        if (recognitionRef.current) recognitionRef.current.stop()
-        // Save and redirect without calling AI again
-        completeInterviewNow()
-      }
+  // ---- SAVE AND REDIRECT (HARDWARE KILL) ----
+  const completeInterviewNow = useCallback(async () => {
+    setPhase('ended')
+    setStatusLabel('Interview complete')
+
+    // KILL HARDWARE: Explicitly stop camera and mic
+    if (videoRef.current?.srcObject) {
+      videoRef.current.srcObject.getTracks().forEach((track) => track.stop())
     }
-
-    const onUnload = () => {
-      navigator.sendBeacon(
-        '/api/complete-interview',
-        JSON.stringify({
-          email,
-          disqualified: true,
-          closedEarly: true,
-          messages: messagesRef.current,
-        })
-      )
+    if (recognitionRef.current) {
+      recognitionRef.current.stop()
     }
-
-    document.addEventListener('visibilitychange', onHide)
-    window.addEventListener('beforeunload', onUnload)
-    return () => {
-      document.removeEventListener('visibilitychange', onHide)
-      window.removeEventListener('beforeunload', onUnload)
-    }
-  }, [email])
-
-  // ---- Countdown timer ----
-  useEffect(() => {
-    timerRef.current = setInterval(() => {
-      setTimeLeft(prev => {
-        const next = prev - 1
-        timeLeftRef.current = next
-
-        if (next <= WARNING_SECONDS && !warningFiredRef.current) {
-          warningFiredRef.current = true
-        }
-
-        if (next <= 0 && !endingFiredRef.current) {
-          endingFiredRef.current = true
-          clearInterval(timerRef.current)
-          triggerGoodbye()
-          return 0
-        }
-
-        return next > 0 ? next : 0
-      })
-    }, 1000)
-    return () => clearInterval(timerRef.current)
-  }, [])
-
-  // ---- Kick off the interview ----
-  useEffect(() => {
-    const t = setTimeout(() => callAI('START_INTERVIEW', []), 900)
-    return () => clearTimeout(t)
-  }, [])
-
-  // =============================================
-  // CALL GROQ AI
-  // =============================================
-  const callAI = useCallback(async (userContent, currentMessages) => {
-    setPhase('processing')
-    setStatusLabel('Sarfraz is thinking...')
-
-    // Inject time warning into the message (only once) -- never show to user
-    let content = userContent
-    if (
-      warningFiredRef.current &&
-      userContent !== 'START_INTERVIEW' &&
-      !userContent.includes('[TIME_WARNING]')
-    ) {
-      content = `${userContent} [TIME_WARNING]`
-    }
-
-    const newMsg  = { role: 'user', content }
-    const updated = userContent === 'START_INTERVIEW'
-      ? [newMsg]
-      : [...currentMessages, newMsg]
-
-    setMessages(updated)
-    messagesRef.current = updated
+    window.speechSynthesis?.cancel()
 
     try {
-      const res = await fetch('/api/chat', {
+      await fetch('/api/complete-interview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: updated }),
+        body: JSON.stringify({
+          email,
+          disqualified: disqualifiedRef.current,
+          closedEarly:  closedEarlyRef.current,
+          messages:     messagesRef.current,
+        }),
       })
+    } catch {}
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    setTimeout(() => onComplete(), 1500)
+  }, [email, onComplete])
 
-      const { reply } = await res.json()
-      const safeReply = cleanText(reply)
-
-      const withReply = [...updated, { role: 'assistant', content: safeReply }]
-      setMessages(withReply)
-      messagesRef.current = withReply
-      setCurrentAiText(safeReply)
-      setQuestionIndex(q => Math.min(q + 1, 5))
-      speakText(safeReply)
-    } catch (err) {
-      console.error('callAI error:', err)
-      setStatusLabel('Connection issue. Press the mic to try again.')
-      setPhase('waiting')
-    }
-  }, [])
-
-  // =============================================
-  // TEXT TO SPEECH (male voice)
-  // =============================================
-  const speakText = useCallback((text) => {
-    const synth = window.speechSynthesis
-    synth.cancel()
-
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.rate   = 0.92
-    utterance.pitch  = 0.95
-    utterance.volume = 1.0
-
-    // Wait a tick for voices to be loaded, then assign
-    setTimeout(() => {
-      const maleVoice = getMaleVoice()
-      if (maleVoice) utterance.voice = maleVoice
-    }, 50)
-
-    setPhase('ai_speaking')
-    setStatusLabel('Sarfraz is speaking...')
-
-    utterance.onend = () => {
-      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
-      setPhase('waiting')
-      setStatusLabel('Your turn — press the mic or Spacebar to answer')
-    }
-    utterance.onerror = () => {
-      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
-      setPhase('waiting')
-      setStatusLabel('Your turn — press the mic or Spacebar to answer')
-    }
-
-    synth.speak(utterance)
-  }, [])
-
-  // =============================================
-  // END INTERVIEW — get goodbye from AI, then close
-  // =============================================
+  // ---- END INTERVIEW — get goodbye from AI, then close ----
   const triggerGoodbye = useCallback(async () => {
     if (recognitionRef.current) recognitionRef.current.stop()
     window.speechSynthesis?.cancel()
@@ -322,7 +194,7 @@ export default function Interview({ email, onComplete }) {
 
     const endMsg = {
       role: 'user',
-      content: '[END_INTERVIEW] The 20 minutes are up. Please give your warm, genuine closing remarks.',
+      content: '[END_INTERVIEW] The interview is ending. Please give your warm, genuine closing remarks.',
     }
     const endMessages = [...messagesRef.current, endMsg]
 
@@ -354,7 +226,6 @@ export default function Interview({ email, onComplete }) {
 
       utterance.onend  = finish
       utterance.onerror = finish
-      // Fallback: if TTS never fires onend, close after estimated duration
       const estimatedMs = Math.max(6000, safeReply.length * 75)
       setTimeout(finish, estimatedMs + 3000)
 
@@ -362,30 +233,191 @@ export default function Interview({ email, onComplete }) {
     } catch {
       completeInterviewNow()
     }
+  }, [completeInterviewNow])
+
+
+  // ---- Tab change = END interview immediately ----
+  useEffect(() => {
+    const onHide = () => {
+      if (!document.hidden) return
+      if (phaseRef.current === 'ended' || phaseRef.current === 'ending') return
+      closedEarlyRef.current  = true
+      disqualifiedRef.current = true
+      if (!endingFiredRef.current) {
+        endingFiredRef.current = true
+        clearInterval(timerRef.current)
+        completeInterviewNow() // Includes the hardware kill logic
+      }
+    }
+
+    const onUnload = () => {
+      navigator.sendBeacon(
+        '/api/complete-interview',
+        JSON.stringify({
+          email,
+          disqualified: true,
+          closedEarly: true,
+          messages: messagesRef.current,
+        })
+      )
+    }
+
+    document.addEventListener('visibilitychange', onHide)
+    window.addEventListener('beforeunload', onUnload)
+    return () => {
+      document.removeEventListener('visibilitychange', onHide)
+      window.removeEventListener('beforeunload', onUnload)
+    }
+  }, [email, completeInterviewNow])
+
+  // ---- Countdown timer ----
+  useEffect(() => {
+    timerRef.current = setInterval(() => {
+      setTimeLeft(prev => {
+        const next = prev - 1
+        timeLeftRef.current = next
+
+        if (next <= WARNING_SECONDS && !warningFiredRef.current) {
+          warningFiredRef.current = true
+        }
+
+        if (next <= 0 && !endingFiredRef.current) {
+          endingFiredRef.current = true
+          clearInterval(timerRef.current)
+          triggerGoodbye()
+          return 0
+        }
+
+        return next > 0 ? next : 0
+      })
+    }, 1000)
+    return () => clearInterval(timerRef.current)
+  }, [triggerGoodbye])
+
+
+  // =============================================
+  // TEXT TO SPEECH (male voice)
+  // =============================================
+  const speakText = useCallback((text, onEndCallback = null) => {
+    const synth = window.speechSynthesis
+    synth.cancel()
+
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.rate   = 0.92
+    utterance.pitch  = 0.95
+    utterance.volume = 1.0
+
+    setTimeout(() => {
+      const maleVoice = getMaleVoice()
+      if (maleVoice) utterance.voice = maleVoice
+    }, 50)
+
+    setPhase('ai_speaking')
+    setStatusLabel('Sarfraz is speaking...')
+
+    utterance.onend = () => {
+      if (onEndCallback) {
+        onEndCallback();
+        return;
+      }
+      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
+      setPhase('waiting')
+      setStatusLabel('Your turn — press the mic or Spacebar to answer')
+    }
+    utterance.onerror = () => {
+      if (onEndCallback) {
+        onEndCallback();
+        return;
+      }
+      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
+      setPhase('waiting')
+      setStatusLabel('Your turn — press the mic or Spacebar to answer')
+    }
+
+    synth.speak(utterance)
   }, [])
 
+
   // =============================================
-  // SAVE AND REDIRECT
+  // CALL GROQ AI
   // =============================================
-  const completeInterviewNow = useCallback(async () => {
-    setPhase('ended')
-    setStatusLabel('Interview complete')
+  const callAI = useCallback(async (userContent, currentMessages) => {
+    setPhase('processing')
+    setStatusLabel('Sarfraz is thinking...')
+
+    let content = userContent
+    if (
+      warningFiredRef.current &&
+      userContent !== 'START_INTERVIEW' &&
+      !userContent.includes('[TIME_WARNING]')
+    ) {
+      content = `${userContent} [TIME_WARNING]`
+    }
+
+    const newMsg  = { role: 'user', content }
+    const updated = userContent === 'START_INTERVIEW'
+      ? [newMsg]
+      : [...currentMessages, newMsg]
+
+    setMessages(updated)
+    messagesRef.current = updated
 
     try {
-      await fetch('/api/complete-interview', {
+      const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email,
-          disqualified: disqualifiedRef.current,
-          closedEarly:  closedEarlyRef.current,
-          messages:     messagesRef.current,
-        }),
+        body: JSON.stringify({ messages: updated }),
       })
-    } catch {}
 
-    setTimeout(() => onComplete(), 1500)
-  }, [email, onComplete])
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+      const { reply } = await res.json()
+      const isEnding = reply.includes('[END_INTERVIEW]') // Catch AI finishing early
+      const safeReply = cleanText(reply)
+
+      const withReply = [...updated, { role: 'assistant', content: safeReply }]
+      setMessages(withReply)
+      messagesRef.current = withReply
+      setCurrentAiText(safeReply)
+      setQuestionIndex(q => Math.min(q + 1, 5))
+
+      // If AI decided to end the interview, trigger shutdown after speaking
+      if (isEnding) {
+        speakText(safeReply, () => completeInterviewNow())
+      } else {
+        speakText(safeReply)
+      }
+
+    } catch (err) {
+      console.error('callAI error:', err)
+      setStatusLabel('Connection issue. Press the mic to try again.')
+      setPhase('waiting')
+    }
+  }, [speakText, completeInterviewNow])
+
+
+  // ---- Kick off the interview ----
+  useEffect(() => {
+    const t = setTimeout(() => callAI('START_INTERVIEW', []), 900)
+    return () => clearTimeout(t)
+  }, [callAI])
+
+
+  // =============================================
+  // EARLY QUIT HELPER
+  // =============================================
+  const checkForEarlyQuit = (text) => {
+    const lower = text.toLowerCase()
+    if (lower.includes('close the interview') || lower.match(/\b(quit|stop|leave|end the interview)\b/)) {
+      const confirmEnd = window.confirm("Are you sure you want to end the interview early?");
+      if (confirmEnd) {
+        closedEarlyRef.current = true;
+        triggerGoodbye();
+        return true;
+      }
+    }
+    return false;
+  }
 
   // =============================================
   // SPEECH RECOGNITION
@@ -420,7 +452,9 @@ export default function Interview({ email, onComplete }) {
       const text = finalTextRef.current.trim()
       setLiveTranscript('')
       if (text) {
-        callAI(text, messagesRef.current)
+        if (!checkForEarlyQuit(text)) {
+          callAI(text, messagesRef.current)
+        }
       } else {
         setPhase('waiting')
         setStatusLabel('No speech detected. Press the mic and try again.')
@@ -442,7 +476,7 @@ export default function Interview({ email, onComplete }) {
     setPhase('listening')
     setStatusLabel('Listening... speak your answer clearly')
     recognition.start()
-  }, [callAI])
+  }, [callAI, triggerGoodbye])
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) recognitionRef.current.stop()
@@ -453,8 +487,10 @@ export default function Interview({ email, onComplete }) {
     if (!text) return
     setTextDraft('')
     setShowTextInput(false)
-    callAI(text, messagesRef.current)
-  }, [textDraft, callAI])
+    if (!checkForEarlyQuit(text)) {
+      callAI(text, messagesRef.current)
+    }
+  }, [textDraft, callAI, triggerGoodbye])
 
   // Spacebar shortcut
   useEffect(() => {
@@ -476,7 +512,7 @@ export default function Interview({ email, onComplete }) {
   const timeWarn     = timeLeft <= WARNING_SECONDS
   const timeDanger   = timeLeft <= 60
 
-  // Clean conversation for display (hide internal flags and system messages)
+  // Clean conversation for display
   const displayMessages = messages
     .filter(m =>
       m.content !== 'START_INTERVIEW' &&
