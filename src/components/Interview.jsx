@@ -1,85 +1,96 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 
-const TOTAL_SECONDS = 20 * 60
-const WARNING_SECONDS = 3 * 60
+const TOTAL_SECONDS  = 20 * 60  // 20 minutes
+const WARNING_SECONDS = 3 * 60  // warn at 3 minutes remaining
 
-/* =============================================
-   AI AVATAR ORB
-   ============================================= */
+// ---- Strip internal flags from any text before displaying or speaking ----
+function cleanText(text) {
+  return (text || '')
+    .replace(/\[TIME_WARNING\]/gi, '')
+    .replace(/\[END_INTERVIEW[^\]]*\]/gi, '')
+    .replace(/TIME_WARNING/g, '')
+    .replace(/END_INTERVIEW/g, '')
+    .trim()
+}
+
+// ---- Pick a male English voice ----
+function getMaleVoice() {
+  const voices = window.speechSynthesis.getVoices()
+  return (
+    voices.find(v => v.name === 'Google UK English Male') ||
+    voices.find(v => v.name === 'Microsoft David Desktop - English (United States)') ||
+    voices.find(v => v.name === 'Microsoft David - English (United States)') ||
+    voices.find(v => v.name === 'Microsoft Mark - English (United States)') ||
+    voices.find(v => v.name.toLowerCase().includes('david') && v.lang.startsWith('en')) ||
+    voices.find(v => v.name.toLowerCase().includes('mark') && v.lang.startsWith('en')) ||
+    voices.find(v => v.name.toLowerCase().includes('james') && v.lang.startsWith('en')) ||
+    voices.find(v =>
+      v.lang === 'en-US' &&
+      v.localService &&
+      !v.name.toLowerCase().match(/zira|female|aria|jenny|sonia|libby|natasha|hazel|susan/)
+    ) ||
+    voices.find(v => v.lang.startsWith('en'))
+  )
+}
+
+// ---- AI Avatar Orb ----
 function AiOrb({ phase }) {
-  const isPulsing = phase === 'ai_speaking' || phase === 'listening'
+  const pulse = phase === 'ai_speaking' || phase === 'listening'
   return (
     <div className="orb-wrapper">
-      {isPulsing && <div className={`orb-ring orb-ring-1 ${isPulsing ? 'pulse' : ''}`} />}
-      {isPulsing && <div className={`orb-ring orb-ring-2 ${isPulsing ? 'pulse' : ''}`} />}
+      {pulse && <div className={`orb-ring orb-ring-1 pulse`} />}
+      {pulse && <div className={`orb-ring orb-ring-2 pulse`} />}
       <div
         className={`orb ${
-          phase === 'ai_speaking'
-            ? 'speaking'
-            : phase === 'listening'
-            ? 'listening'
-            : phase === 'processing'
-            ? 'processing'
-            : 'idle'
+          phase === 'ai_speaking' ? 'speaking'
+          : phase === 'listening' ? 'listening'
+          : phase === 'processing' ? 'processing'
+          : 'idle'
         }`}
       />
     </div>
   )
 }
 
-/* =============================================
-   TIMER DISPLAY
-   ============================================= */
+// ---- Timer display ----
 function Timer({ seconds }) {
-  const m = Math.floor(seconds / 60).toString().padStart(2, '0')
-  const s = (seconds % 60).toString().padStart(2, '0')
+  const m   = Math.floor(seconds / 60).toString().padStart(2, '0')
+  const s   = (seconds % 60).toString().padStart(2, '0')
   const pct = (seconds / TOTAL_SECONDS) * 100
-  const isWarning = seconds <= WARNING_SECONDS
-  const isDanger = seconds <= 60
-
-  const barColor = isDanger
-    ? '#ff6060'
-    : isWarning
-    ? '#FDB302'
-    : 'rgba(253,179,2,0.7)'
+  const warn   = seconds <= WARNING_SECONDS
+  const danger = seconds <= 60
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 100 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 110 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
-        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', letterSpacing: '0.04em' }}>
+        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', letterSpacing: '0.04em' }}>
           TIME LEFT
         </span>
-        <span
-          style={{
-            fontFamily: 'monospace',
-            fontSize: '1.15rem',
-            fontWeight: 700,
-            color: isDanger ? '#ff6060' : isWarning ? 'var(--gold)' : 'var(--text-white)',
-            letterSpacing: '0.06em',
-          }}
-        >
+        <span style={{
+          fontFamily: 'monospace',
+          fontSize: '1.15rem',
+          fontWeight: 700,
+          color: danger ? '#ff6060' : warn ? 'var(--gold)' : 'var(--text-white)',
+          letterSpacing: '0.06em',
+        }}>
           {m}:{s}
         </span>
       </div>
       <div className="timer-bar-track">
-        <div
-          className="timer-bar-fill"
-          style={{ width: `${pct}%`, background: barColor }}
-        />
+        <div className="timer-bar-fill" style={{
+          width: `${pct}%`,
+          background: danger ? '#ff6060' : warn ? 'var(--gold)' : 'rgba(253,179,2,0.7)',
+        }} />
       </div>
     </div>
   )
 }
 
-/* =============================================
-   PROGRESS INDICATOR
-   ============================================= */
+// ---- Progress dots ----
 function ProgressDots({ current, total = 5 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginRight: 2 }}>
-        Q
-      </span>
+      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginRight: 2 }}>Q</span>
       {Array.from({ length: total }, (_, i) => (
         <div
           key={i}
@@ -90,98 +101,105 @@ function ProgressDots({ current, total = 5 }) {
   )
 }
 
-/* =============================================
-   MAIN INTERVIEW COMPONENT
-   ============================================= */
+// =============================================
+// MAIN INTERVIEW COMPONENT
+// =============================================
 export default function Interview({ email, onComplete }) {
-  const [phase, setPhase] = useState('initializing')
-  // phases: initializing | ai_speaking | waiting | listening | processing | ending | ended
-
-  const [messages, setMessages] = useState([])
+  const [phase, setPhase]             = useState('initializing')
+  const [messages, setMessages]       = useState([])
   const [currentAiText, setCurrentAiText] = useState('')
   const [liveTranscript, setLiveTranscript] = useState('')
   const [questionIndex, setQuestionIndex] = useState(0)
-  const [timeLeft, setTimeLeft] = useState(TOTAL_SECONDS)
+  const [timeLeft, setTimeLeft]       = useState(TOTAL_SECONDS)
   const [showTextInput, setShowTextInput] = useState(false)
-  const [textDraft, setTextDraft] = useState('')
+  const [textDraft, setTextDraft]     = useState('')
   const [statusLabel, setStatusLabel] = useState('Connecting...')
 
-  // Persistent refs (don't trigger re-renders)
-  const messagesRef      = useRef([])
-  const phaseRef         = useRef('initializing')
-  const timeLeftRef      = useRef(TOTAL_SECONDS)
-  const warningFiredRef  = useRef(false)
-  const endingFiredRef   = useRef(false)
-  const violationsRef    = useRef(0)
-  const disqualifiedRef  = useRef(false)
-  const recognitionRef   = useRef(null)
-  const videoRef         = useRef(null)
-  const timerRef         = useRef(null)
-  const voicesLoadedRef  = useRef(false)
-  const finalTextRef     = useRef('')
-  const utteranceRef     = useRef(null)
+  // Refs that persist across renders
+  const messagesRef     = useRef([])
+  const phaseRef        = useRef('initializing')
+  const timeLeftRef     = useRef(TOTAL_SECONDS)
+  const warningFiredRef = useRef(false)
+  const endingFiredRef  = useRef(false)
+  const violationsRef   = useRef(0)
+  const disqualifiedRef = useRef(false)
+  const closedEarlyRef  = useRef(false)
+  const recognitionRef  = useRef(null)
+  const videoRef        = useRef(null)
+  const timerRef        = useRef(null)
+  const finalTextRef    = useRef('')
 
-  // Keep refs in sync with state
-  useEffect(() => { messagesRef.current = messages }, [messages])
-  useEffect(() => { phaseRef.current = phase }, [phase])
-  useEffect(() => { timeLeftRef.current = timeLeft }, [timeLeft])
+  useEffect(() => { messagesRef.current = messages },    [messages])
+  useEffect(() => { phaseRef.current    = phase },       [phase])
+  useEffect(() => { timeLeftRef.current = timeLeft },    [timeLeft])
 
-  /* --- Camera setup --- */
+  // ---- Camera ----
   useEffect(() => {
-    const initCamera = async () => {
+    const init = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'user', width: 320, height: 240 },
           audio: false,
         })
         if (videoRef.current) videoRef.current.srcObject = stream
-      } catch (err) {
-        // Camera unavailable
-      }
+      } catch {}
     }
-    initCamera()
+    init()
     return () => {
       if (videoRef.current?.srcObject) {
-        videoRef.current.srcObject.getTracks().forEach((t) => t.stop())
+        videoRef.current.srcObject.getTracks().forEach(t => t.stop())
       }
     }
   }, [])
 
-  /* --- Pre-load voices --- */
+  // ---- Pre-load voices ----
   useEffect(() => {
-    const loadVoices = () => { voicesLoadedRef.current = true }
-    if (window.speechSynthesis.getVoices().length > 0) {
-      voicesLoadedRef.current = true
-    } else {
-      window.speechSynthesis.addEventListener('voiceschanged', loadVoices)
+    if (window.speechSynthesis.getVoices().length === 0) {
+      window.speechSynthesis.addEventListener('voiceschanged', () => {})
     }
-    return () => window.speechSynthesis.removeEventListener('voiceschanged', loadVoices)
   }, [])
 
-  /* --- Anti-cheat monitoring --- */
+  // ---- Tab change = END interview immediately ----
   useEffect(() => {
     const onHide = () => {
+      if (!document.hidden) return
       if (phaseRef.current === 'ended' || phaseRef.current === 'ending') return
-      violationsRef.current += 1
-      if (violationsRef.current >= 3) disqualifiedRef.current = true
+      closedEarlyRef.current  = true
+      disqualifiedRef.current = true
+      if (!endingFiredRef.current) {
+        endingFiredRef.current = true
+        clearInterval(timerRef.current)
+        window.speechSynthesis?.cancel()
+        if (recognitionRef.current) recognitionRef.current.stop()
+        // Save and redirect without calling AI again
+        completeInterviewNow()
+      }
     }
-    const onBlur = () => {
-      if (phaseRef.current === 'ended' || phaseRef.current === 'ending') return
-      violationsRef.current += 0.5
-      if (violationsRef.current >= 3) disqualifiedRef.current = true
+
+    const onUnload = () => {
+      navigator.sendBeacon(
+        '/api/complete-interview',
+        JSON.stringify({
+          email,
+          disqualified: true,
+          closedEarly: true,
+          messages: messagesRef.current,
+        })
+      )
     }
+
     document.addEventListener('visibilitychange', onHide)
-    window.addEventListener('blur', onBlur)
+    window.addEventListener('beforeunload', onUnload)
     return () => {
       document.removeEventListener('visibilitychange', onHide)
-      window.removeEventListener('blur', onBlur)
+      window.removeEventListener('beforeunload', onUnload)
     }
-  }, [])
+  }, [email])
 
-  /* --- Countdown timer --- */
+  // ---- Countdown timer ----
   useEffect(() => {
     timerRef.current = setInterval(() => {
-      setTimeLeft((prev) => {
+      setTimeLeft(prev => {
         const next = prev - 1
         timeLeftRef.current = next
 
@@ -192,7 +210,7 @@ export default function Interview({ email, onComplete }) {
         if (next <= 0 && !endingFiredRef.current) {
           endingFiredRef.current = true
           clearInterval(timerRef.current)
-          triggerEnd()
+          triggerGoodbye()
           return 0
         }
 
@@ -202,173 +220,33 @@ export default function Interview({ email, onComplete }) {
     return () => clearInterval(timerRef.current)
   }, [])
 
-  /* --- Kick off the interview --- */
+  // ---- Kick off the interview ----
   useEffect(() => {
-    const t = setTimeout(() => {
-      callAI('START_INTERVIEW', [])
-    }, 800)
+    const t = setTimeout(() => callAI('START_INTERVIEW', []), 900)
     return () => clearTimeout(t)
   }, [])
 
-  /* ============================================
-     END INTERVIEW FLOW
-     ============================================ */
-  const completeInterview = useCallback(async () => {
-    setPhase('ended')
-    setStatusLabel('Interview complete')
-
-    try {
-      await fetch('/api/complete-interview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, disqualified: disqualifiedRef.current }),
-      })
-    } catch {
-      // Best effort
-    }
-
-    setTimeout(() => onComplete(), 1800)
-  }, [email, onComplete])
-
-  const triggerEnd = useCallback(async () => {
-    if (recognitionRef.current) recognitionRef.current.stop()
-    window.speechSynthesis?.cancel()
-    setPhase('ending')
-    setStatusLabel('Wrapping up...')
-
-    const endMsg = {
-      role: 'user',
-      content: '[END_INTERVIEW] The 20 minutes are up. Please give your warm closing remarks.',
-    }
-    const endMessages = [...messagesRef.current, endMsg]
-
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: endMessages }),
-      })
-      const { reply } = await res.json()
-      
-      const cleanReply = reply.replace(/\[.*?\]/g, '').trim()
-      setCurrentAiText(cleanReply)
-
-      const synth = window.speechSynthesis
-      synth.cancel() // Clear queues
-
-      const utterance = new SpeechSynthesisUtterance(cleanReply)
-      utterance.rate = 0.88
-      utteranceRef.current = utterance // Prevent deletion
-
-      utterance.onend = () => {
-        completeInterview()
-      }
-      utterance.onerror = () => {
-        completeInterview()
-      }
-
-      // FIX: 100ms delay to prevent Chrome from muting the audio
-      setTimeout(() => {
-        synth.speak(utterance)
-      }, 100)
-
-      // Fallback timeout
-      setTimeout(() => {
-        if (phaseRef.current !== 'ended') {
-          synth.cancel()
-          completeInterview()
-        }
-      }, cleanReply.length * 60 + 2000)
-
-    } catch {
-      completeInterview()
-    }
-  }, [completeInterview])
-
-  /* ============================================
-     TEXT-TO-SPEECH (UPDATED WITH AUDIO MUTING FIX)
-     ============================================ */
-  const speakText = useCallback((text, afterMessages) => {
-    const synth = window.speechSynthesis
-    synth.cancel() // Clear ghost queues
-
-    const isEndingNow = text.includes('[END_INTERVIEW]')
-    const cleanTextToSpeak = text.replace(/\[.*?\]/g, '').trim()
-
-    const utterance = new SpeechSynthesisUtterance(cleanTextToSpeak)
-    utterance.rate = 0.92
-    utterance.pitch = 1.0
-    utterance.volume = 1.0
-
-    utteranceRef.current = utterance
-
-    const voices = synth.getVoices()
-    const preferred =
-      voices.find((v) => v.name.includes('Male') || v.name.includes('Alex') || v.name.includes('Daniel')) ||
-      voices.find((v) => v.name === 'Google US English') ||
-      voices.find((v) => v.lang.startsWith('en'))
-    if (preferred) utterance.voice = preferred
-
-    setPhase('ai_speaking')
-    setStatusLabel('Alex is speaking...')
-
-    utterance.onend = () => {
-      if (isEndingNow) {
-        completeInterview()
-        return
-      }
-      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
-      setPhase('waiting')
-      setStatusLabel('Your turn — press the mic to answer')
-    }
-
-    utterance.onerror = (e) => {
-      console.warn('Speech API Error:', e)
-      if (isEndingNow) {
-        completeInterview()
-        return
-      }
-      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
-      setPhase('waiting')
-      setStatusLabel('Your turn — press the mic to answer')
-    }
-
-    // FIX: 100ms delay forces the browser to finish canceling before trying to speak
-    setTimeout(() => {
-      synth.speak(utterance)
-    }, 100)
-
-    // Safety Timeout Fallback
-    const estimatedReadingTime = cleanTextToSpeak.length * 60 + 2000
-    setTimeout(() => {
-      if (synth.speaking) {
-        console.log("Browser TTS hung. Forcing UI unlock.")
-        synth.cancel()
-
-        if (isEndingNow) {
-          completeInterview()
-        } else if (phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
-          setPhase('waiting')
-          setStatusLabel('Your turn — press the mic to answer')
-        }
-      }
-    }, estimatedReadingTime + 100)
-  }, [completeInterview])
-
-  /* ============================================
-     CORE AI CALL
-     ============================================ */
+  // =============================================
+  // CALL GROQ AI
+  // =============================================
   const callAI = useCallback(async (userContent, currentMessages) => {
     setPhase('processing')
-    setStatusLabel('Alex is thinking...')
+    setStatusLabel('Sarfraz is thinking...')
 
+    // Inject time warning into the message (only once) -- never show to user
     let content = userContent
-    if (warningFiredRef.current && !content.includes('[TIME_WARNING]') && content !== 'START_INTERVIEW') {
-      content = `${content} [TIME_WARNING]`
+    if (
+      warningFiredRef.current &&
+      userContent !== 'START_INTERVIEW' &&
+      !userContent.includes('[TIME_WARNING]')
+    ) {
+      content = `${userContent} [TIME_WARNING]`
     }
 
-    const newMsg = { role: 'user', content }
-    const updated = userContent === 'START_INTERVIEW' ? [newMsg] : [...currentMessages, newMsg]
+    const newMsg  = { role: 'user', content }
+    const updated = userContent === 'START_INTERVIEW'
+      ? [newMsg]
+      : [...currentMessages, newMsg]
 
     setMessages(updated)
     messagesRef.current = updated
@@ -380,25 +258,138 @@ export default function Interview({ email, onComplete }) {
         body: JSON.stringify({ messages: updated }),
       })
 
-      if (!res.ok) throw new Error('API error')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
       const { reply } = await res.json()
-      const withReply = [...updated, { role: 'assistant', content: reply }]
+      const safeReply = cleanText(reply)
 
+      const withReply = [...updated, { role: 'assistant', content: safeReply }]
       setMessages(withReply)
       messagesRef.current = withReply
-      setCurrentAiText(reply.replace(/\[.*?\]/g, '').trim()) 
-      setQuestionIndex((q) => Math.min(q + 1, 5))
-      speakText(reply, withReply)
+      setCurrentAiText(safeReply)
+      setQuestionIndex(q => Math.min(q + 1, 5))
+      speakText(safeReply)
     } catch (err) {
-      setStatusLabel('Connection issue. Please try again.')
+      console.error('callAI error:', err)
+      setStatusLabel('Connection issue. Press the mic to try again.')
       setPhase('waiting')
     }
-  }, [speakText])
+  }, [])
 
-  /* ============================================
-     SPEECH RECOGNITION
-     ============================================ */
+  // =============================================
+  // TEXT TO SPEECH (male voice)
+  // =============================================
+  const speakText = useCallback((text) => {
+    const synth = window.speechSynthesis
+    synth.cancel()
+
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.rate   = 0.92
+    utterance.pitch  = 0.95
+    utterance.volume = 1.0
+
+    // Wait a tick for voices to be loaded, then assign
+    setTimeout(() => {
+      const maleVoice = getMaleVoice()
+      if (maleVoice) utterance.voice = maleVoice
+    }, 50)
+
+    setPhase('ai_speaking')
+    setStatusLabel('Sarfraz is speaking...')
+
+    utterance.onend = () => {
+      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
+      setPhase('waiting')
+      setStatusLabel('Your turn — press the mic or Spacebar to answer')
+    }
+    utterance.onerror = () => {
+      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
+      setPhase('waiting')
+      setStatusLabel('Your turn — press the mic or Spacebar to answer')
+    }
+
+    synth.speak(utterance)
+  }, [])
+
+  // =============================================
+  // END INTERVIEW — get goodbye from AI, then close
+  // =============================================
+  const triggerGoodbye = useCallback(async () => {
+    if (recognitionRef.current) recognitionRef.current.stop()
+    window.speechSynthesis?.cancel()
+    setPhase('ending')
+    setStatusLabel('Wrapping up...')
+
+    const endMsg = {
+      role: 'user',
+      content: '[END_INTERVIEW] The 20 minutes are up. Please give your warm, genuine closing remarks.',
+    }
+    const endMessages = [...messagesRef.current, endMsg]
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: endMessages }),
+      })
+      const { reply } = await res.json()
+      const safeReply = cleanText(reply)
+
+      setCurrentAiText(safeReply)
+
+      const synth     = window.speechSynthesis
+      const utterance = new SpeechSynthesisUtterance(safeReply)
+      utterance.rate  = 0.88
+      utterance.pitch = 0.95
+
+      const maleVoice = getMaleVoice()
+      if (maleVoice) utterance.voice = maleVoice
+
+      let done = false
+      const finish = () => {
+        if (done) return
+        done = true
+        completeInterviewNow()
+      }
+
+      utterance.onend  = finish
+      utterance.onerror = finish
+      // Fallback: if TTS never fires onend, close after estimated duration
+      const estimatedMs = Math.max(6000, safeReply.length * 75)
+      setTimeout(finish, estimatedMs + 3000)
+
+      synth.speak(utterance)
+    } catch {
+      completeInterviewNow()
+    }
+  }, [])
+
+  // =============================================
+  // SAVE AND REDIRECT
+  // =============================================
+  const completeInterviewNow = useCallback(async () => {
+    setPhase('ended')
+    setStatusLabel('Interview complete')
+
+    try {
+      await fetch('/api/complete-interview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          disqualified: disqualifiedRef.current,
+          closedEarly:  closedEarlyRef.current,
+          messages:     messagesRef.current,
+        }),
+      })
+    } catch {}
+
+    setTimeout(() => onComplete(), 1500)
+  }, [email, onComplete])
+
+  // =============================================
+  // SPEECH RECOGNITION
+  // =============================================
   const startListening = useCallback(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SR) {
@@ -407,11 +398,11 @@ export default function Interview({ email, onComplete }) {
       return
     }
 
-    const recognition = new SR()
-    recognition.continuous = true
+    const recognition        = new SR()
+    recognition.continuous   = true
     recognition.interimResults = true
-    recognition.lang = 'en-US' 
-    finalTextRef.current = ''
+    recognition.lang         = 'en-US'
+    finalTextRef.current     = ''
 
     recognition.onresult = (event) => {
       let interim = ''
@@ -427,33 +418,29 @@ export default function Interview({ email, onComplete }) {
 
     recognition.onend = () => {
       const text = finalTextRef.current.trim()
+      setLiveTranscript('')
       if (text) {
-        setLiveTranscript('')
         callAI(text, messagesRef.current)
       } else {
         setPhase('waiting')
-        setStatusLabel('No speech detected. Press the mic to try again.')
-        setLiveTranscript('')
+        setStatusLabel('No speech detected. Press the mic and try again.')
       }
     }
 
     recognition.onerror = (e) => {
-      if (e.error === 'no-speech') {
-        setPhase('waiting')
-        setStatusLabel('No speech detected. Press the mic to try again.')
-      } else if (e.error === 'not-allowed') {
+      setLiveTranscript('')
+      if (e.error === 'not-allowed') {
         setShowTextInput(true)
         setStatusLabel('Mic blocked. Type your answer below.')
       } else {
         setPhase('waiting')
-        setStatusLabel('Mic error. Press to try again or type below.')
+        setStatusLabel('Mic error. Press to try again or use the type option.')
       }
-      setLiveTranscript('')
     }
 
     recognitionRef.current = recognition
     setPhase('listening')
-    setStatusLabel('Listening... speak your answer')
+    setStatusLabel('Listening... speak your answer clearly')
     recognition.start()
   }, [callAI])
 
@@ -469,50 +456,62 @@ export default function Interview({ email, onComplete }) {
     callAI(text, messagesRef.current)
   }, [textDraft, callAI])
 
-  /* ============================================
-     DERIVED FLAGS
-     ============================================ */
-  const canInteract = phase === 'waiting' || showTextInput
-  const isListening = phase === 'listening'
-  const isEnding = phase === 'ending' || phase === 'ended'
-  const timeIsWarning = timeLeft <= WARNING_SECONDS
-  const timeIsDanger = timeLeft <= 60
+  // Spacebar shortcut
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.code !== 'Space') return
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      if (phase === 'ended' || phase === 'ending') return
+      e.preventDefault()
+      if (phase === 'listening') stopListening()
+      else if (phase === 'waiting') startListening()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [phase, startListening, stopListening])
 
-  /* ============================================
-     RENDER
-     ============================================ */
+  const canInteract  = phase === 'waiting'
+  const isListening  = phase === 'listening'
+  const isEnding     = phase === 'ending' || phase === 'ended'
+  const timeWarn     = timeLeft <= WARNING_SECONDS
+  const timeDanger   = timeLeft <= 60
+
+  // Clean conversation for display (hide internal flags and system messages)
+  const displayMessages = messages
+    .filter(m =>
+      m.content !== 'START_INTERVIEW' &&
+      !m.content.includes('[END_INTERVIEW]')
+    )
+    .map(m => ({
+      ...m,
+      content: cleanText(m.content),
+    }))
+    .filter(m => m.content.length > 0)
+
   return (
-    <div
-      style={{
-        position: 'relative',
-        zIndex: 1,
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        padding: '16px',
-      }}
-    >
-      {/* ---- TOP BAR ---- */}
-      <div
-        className="glass"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '12px 20px',
-          marginBottom: 16,
-          gap: 16,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <div className="sj-logo-icon" style={{ width: 34, height: 34, fontSize: '1rem', borderRadius: 8 }}>
+    <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', flexDirection: 'column', padding: 16 }}>
+
+      {/* TOP BAR */}
+      <div className="glass" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', marginBottom: 16, gap: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <img
+            src="/logo.png"
+            alt="Scholarship Journey"
+            style={{ height: 36, width: 'auto', objectFit: 'contain' }}
+            onError={e => {
+              e.target.style.display = 'none'
+              e.target.nextSibling.style.display = 'flex'
+            }}
+          />
+          <div
+            className="sj-logo-icon"
+            style={{ width: 34, height: 34, fontSize: '0.9rem', borderRadius: 8, display: 'none' }}
+          >
             SJ
           </div>
           <div>
-            <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>Alex Chen</div>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-              Senior Recruiter, Scholarship Journey
-            </div>
+            <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>Sarfraz Ahmed</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Scholarship Journey</div>
           </div>
         </div>
 
@@ -524,102 +523,55 @@ export default function Interview({ email, onComplete }) {
         <Timer seconds={timeLeft} />
       </div>
 
-      {/* ---- MAIN CONTENT ---- */}
-      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16 }}>
+      {/* MAIN CONTENT */}
+      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16 }}>
 
-        {/* Left: AI Interviewer panel */}
-        <div
-          className="glass-gold"
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            padding: '32px 28px',
-            gap: 24,
-          }}
-        >
-          {/* Progress */}
+        {/* LEFT: AI panel */}
+        <div className="glass-gold" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '28px 24px', gap: 20 }}>
+
+          {/* Progress + status */}
           <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <ProgressDots current={questionIndex} total={5} />
-            <div
-              style={{
-                fontSize: '0.78rem',
-                color: timeIsDanger ? '#ff8080' : timeIsWarning ? 'var(--gold)' : 'var(--text-muted)',
-                fontWeight: timeIsWarning ? 600 : 400,
-              }}
-            >
-              {timeIsDanger
-                ? 'Almost done!'
-                : timeIsWarning
-                ? 'Wrapping up soon'
-                : 'AI Interview in Progress'}
+            <div style={{
+              fontSize: '0.78rem',
+              color: timeDanger ? '#ff8080' : timeWarn ? 'var(--gold)' : 'var(--text-muted)',
+              fontWeight: timeWarn ? 600 : 400,
+            }}>
+              {timeDanger ? 'Wrapping up soon' : timeWarn ? 'Final question' : 'Interview in progress'}
             </div>
           </div>
 
-          {/* AI Orb */}
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 28, minHeight: 280 }}>
+          {/* Orb + AI text */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 28, minHeight: 260, width: '100%' }}>
             <AiOrb phase={phase} />
 
-            {/* AI speech text */}
-            <div
-              style={{
-                textAlign: 'center',
-                maxWidth: 500,
-                width: '100%',
-              }}
-            >
-              {phase === 'initializing' || phase === 'processing' ? (
+            <div style={{ textAlign: 'center', maxWidth: 520, width: '100%' }}>
+              {(phase === 'initializing' || phase === 'processing') ? (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-muted)' }}>
                   <span className="spinner" />
                   <span style={{ fontSize: '0.9rem' }}>{statusLabel}</span>
                 </div>
               ) : (
-                <p
-                  style={{
-                    fontSize: '1.05rem',
-                    lineHeight: 1.7,
-                    color: phase === 'ai_speaking' ? 'var(--text-white)' : 'var(--text-secondary)',
-                    transition: 'color 0.3s',
-                  }}
-                >
-                  {currentAiText || ''}
+                <p style={{
+                  fontSize: '1.05rem',
+                  lineHeight: 1.75,
+                  color: phase === 'ai_speaking' ? 'var(--text-white)' : 'var(--text-secondary)',
+                  transition: 'color 0.3s',
+                }}>
+                  {currentAiText}
                 </p>
               )}
             </div>
           </div>
 
-          {/* Status indicator */}
-          <div
-            style={{
-              width: '100%',
-              padding: '10px 16px',
-              background: 'rgba(0,0,0,0.2)',
-              borderRadius: 10,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-            }}
-          >
-            <div
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background: isListening
-                  ? '#60d0ff'
-                  : phase === 'ai_speaking'
-                  ? 'var(--gold)'
-                  : phase === 'processing' || phase === 'initializing'
-                  ? 'rgba(255,255,255,0.3)'
-                  : '#80e8a0',
-                boxShadow: isListening ? '0 0 8px #60d0ff' : phase === 'ai_speaking' ? '0 0 8px var(--gold)' : 'none',
-                flexShrink: 0,
-                transition: 'all 0.3s',
-              }}
-            />
-            <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-              {statusLabel}
-            </span>
+          {/* Status bar */}
+          <div style={{ width: '100%', padding: '10px 16px', background: 'rgba(0,0,0,0.2)', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 8, height: 8, borderRadius: '50%', flexShrink: 0, transition: 'all 0.3s',
+              background: isListening ? '#60d0ff' : phase === 'ai_speaking' ? 'var(--gold)' : (phase === 'processing' || phase === 'initializing') ? 'rgba(255,255,255,0.2)' : '#80e8a0',
+              boxShadow: isListening ? '0 0 8px #60d0ff' : phase === 'ai_speaking' ? '0 0 8px var(--gold)' : 'none',
+            }} />
+            <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>{statusLabel}</span>
           </div>
 
           {/* Controls */}
@@ -627,52 +579,43 @@ export default function Interview({ email, onComplete }) {
             <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
               {/* Live transcript */}
               {(isListening || liveTranscript) && (
-                <div className="transcript-box">
-                  {liveTranscript || 'Listening...'}
-                </div>
+                <div className="transcript-box">{liveTranscript || 'Listening...'}</div>
               )}
 
-              {/* Text fallback input */}
+              {/* Text fallback */}
               {showTextInput && (
                 <div style={{ display: 'flex', gap: 8 }}>
                   <input
                     className="input"
                     placeholder="Type your answer and press Enter..."
                     value={textDraft}
-                    onChange={(e) => setTextDraft(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleTextSubmit()}
+                    onChange={e => setTextDraft(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleTextSubmit()}
                     autoFocus
                   />
-                  <button
-                    className="btn btn-gold"
-                    style={{ padding: '14px 20px', flexShrink: 0 }}
-                    onClick={handleTextSubmit}
-                    disabled={!textDraft.trim()}
-                  >
+                  <button className="btn btn-gold" style={{ padding: '14px 18px', flexShrink: 0 }} onClick={handleTextSubmit} disabled={!textDraft.trim()}>
                     Send
                   </button>
                 </div>
               )}
 
-              {/* Mic button row */}
+              {/* Mic row */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
                 <button
                   className={`mic-btn ${isListening ? 'recording' : ''}`}
                   onClick={isListening ? stopListening : startListening}
                   disabled={!canInteract && !isListening}
-                  title={isListening ? 'Click to stop recording' : 'Click to answer'}
+                  title={isListening ? 'Click to stop' : 'Click to answer'}
                 >
                   {isListening ? '⏹' : '🎙️'}
                 </button>
 
                 <div style={{ textAlign: 'left' }}>
                   <div style={{ fontSize: '0.82rem', fontWeight: 600 }}>
-                    {isListening ? 'Recording... click to stop' : canInteract ? 'Press to answer' : 'Please wait'}
+                    {isListening ? 'Recording... click to stop' : canInteract ? 'Press mic to answer' : 'Please wait'}
                   </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    {isListening
-                      ? 'Speak clearly into your microphone'
-                      : 'or use keyboard shortcut Space'}
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    {isListening ? 'Speak clearly into your microphone' : 'or press Spacebar'}
                   </div>
                 </div>
 
@@ -683,7 +626,7 @@ export default function Interview({ email, onComplete }) {
                     onClick={() => { setShowTextInput(true); setStatusLabel('Type your answer below') }}
                     disabled={!canInteract}
                   >
-                    ⌨️ Type instead
+                    Type instead
                   </button>
                 )}
               </div>
@@ -692,148 +635,58 @@ export default function Interview({ email, onComplete }) {
 
           {isEnding && (
             <div className="alert alert-success" style={{ width: '100%', textAlign: 'center' }}>
-              Interview complete. Redirecting to results...
+              Interview complete. Redirecting...
             </div>
           )}
         </div>
 
-        {/* Right: Candidate video + transcript log */}
+        {/* RIGHT: Camera + conversation log */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Camera feed */}
-          <div
-            className="glass"
-            style={{ padding: 12, aspectRatio: '4/3', position: 'relative', overflow: 'hidden' }}
-          >
+          {/* Camera */}
+          <div className="glass" style={{ padding: 10, aspectRatio: '4/3', position: 'relative', overflow: 'hidden' }}>
             <video
               ref={videoRef}
               autoPlay
               muted
               playsInline
               className="candidate-video"
-              style={{ borderRadius: 10, width: '100%', height: '100%', objectFit: 'cover' }}
+              style={{ borderRadius: 8 }}
             />
-            <div
-              style={{
-                position: 'absolute',
-                top: 18,
-                left: 18,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-                background: 'rgba(0,0,0,0.5)',
-                backdropFilter: 'blur(8px)',
-                padding: '3px 10px',
-                borderRadius: 20,
-                fontSize: '0.72rem',
-                fontWeight: 600,
-                color: '#ff8080',
-              }}
-            >
+            <div style={{
+              position: 'absolute', top: 14, left: 14,
+              display: 'flex', alignItems: 'center', gap: 5,
+              background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)',
+              padding: '3px 10px', borderRadius: 20,
+              fontSize: '0.7rem', fontWeight: 700, color: '#ff8080',
+            }}>
               <div className="status-dot" style={{ width: 5, height: 5 }} />
               YOU
             </div>
           </div>
 
           {/* Conversation log */}
-          <div
-            className="glass"
-            style={{
-              flex: 1,
-              padding: '16px',
-              overflow: 'hidden',
-              display: 'flex',
-              flexDirection: 'column',
-            }}
-          >
-            <div
-              style={{
-                fontSize: '0.75rem',
-                fontWeight: 600,
-                color: 'var(--text-muted)',
-                letterSpacing: '0.05em',
-                textTransform: 'uppercase',
-                marginBottom: 12,
-              }}
-            >
+          <div className="glass" style={{ flex: 1, padding: 16, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: 10 }}>
               Conversation Log
             </div>
-            <div
-              style={{
-                flex: 1,
-                overflowY: 'auto',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 10,
-              }}
-            >
-              {messages
-                .filter((m) => !m.content.includes('START_INTERVIEW') && !m.content.includes('[END_INTERVIEW]'))
-                .map((m, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      padding: '8px 12px',
-                      borderRadius: 10,
-                      fontSize: '0.78rem',
-                      lineHeight: 1.55,
-                      background:
-                        m.role === 'assistant'
-                          ? 'rgba(253,179,2,0.08)'
-                          : 'rgba(255,255,255,0.05)',
-                      borderLeft: `2px solid ${m.role === 'assistant' ? 'var(--gold)' : 'rgba(255,255,255,0.2)'}`,
-                      color: m.role === 'assistant' ? 'var(--text-white)' : 'var(--text-secondary)',
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: '0.66rem',
-                        fontWeight: 700,
-                        letterSpacing: '0.05em',
-                        textTransform: 'uppercase',
-                        color: m.role === 'assistant' ? 'var(--gold)' : 'var(--text-muted)',
-                        marginBottom: 4,
-                      }}
-                    >
-                      {m.role === 'assistant' ? 'Alex' : 'You'}
-                    </div>
-                    {m.content
-                      .replace(/\[.*?\]/g, '') // Cleans all hidden tags from the chat log too
-                      .trim()}
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {displayMessages.map((m, i) => (
+                <div key={i} style={{
+                  padding: '8px 10px', borderRadius: 8, fontSize: '0.76rem', lineHeight: 1.55,
+                  background: m.role === 'assistant' ? 'rgba(253,179,2,0.08)' : 'rgba(255,255,255,0.04)',
+                  borderLeft: `2px solid ${m.role === 'assistant' ? 'var(--gold)' : 'rgba(255,255,255,0.15)'}`,
+                  color: m.role === 'assistant' ? 'var(--text-white)' : 'var(--text-secondary)',
+                }}>
+                  <div style={{ fontSize: '0.64rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: m.role === 'assistant' ? 'var(--gold)' : 'var(--text-muted)', marginBottom: 3 }}>
+                    {m.role === 'assistant' ? 'Sarfraz' : 'You'}
                   </div>
-                ))}
+                  {m.content}
+                </div>
+              ))}
             </div>
           </div>
         </div>
       </div>
-
-      {/* Keyboard shortcut: Space to start/stop listening */}
-      <SpaceKeyListener
-        onSpace={() => {
-          if (isListening) stopListening()
-          else if (canInteract) startListening()
-        }}
-        active={!isEnding}
-      />
     </div>
   )
-}
-
-/* Spacebar shortcut helper */
-function SpaceKeyListener({ onSpace, active }) {
-  useEffect(() => {
-    if (!active) return
-    const handler = (e) => {
-      if (
-        e.code === 'Space' &&
-        e.target.tagName !== 'INPUT' &&
-        e.target.tagName !== 'TEXTAREA'
-      ) {
-        e.preventDefault()
-        onSpace()
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [active, onSpace])
-  return null
 }
