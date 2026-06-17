@@ -296,7 +296,7 @@ export default function Interview({ email, onComplete }) {
 
 
   // =============================================
-  // TEXT TO SPEECH (male voice)
+  // TEXT TO SPEECH (Robust Voice Loading)
   // =============================================
   const speakText = useCallback((text, onEndCallback = null) => {
     const synth = window.speechSynthesis
@@ -307,34 +307,44 @@ export default function Interview({ email, onComplete }) {
     utterance.pitch  = 0.95
     utterance.volume = 1.0
 
-    setTimeout(() => {
+    const setVoiceAndSpeak = () => {
       const maleVoice = getMaleVoice()
+      // If our preferred male voice exists, use it. Otherwise, let the browser use its default.
       if (maleVoice) utterance.voice = maleVoice
-    }, 50)
+      
+      setPhase('ai_speaking')
+      setStatusLabel('Sarfraz is speaking...')
+      synth.speak(utterance)
+    }
 
-    setPhase('ai_speaking')
-    setStatusLabel('Sarfraz is speaking...')
+    // Handle asynchronous voice loading to prevent the female fallback bug
+    if (synth.getVoices().length > 0) {
+      setVoiceAndSpeak()
+    } else {
+      synth.onvoiceschanged = setVoiceAndSpeak
+      // Safety net: if voices never load, force speak after 500ms
+      setTimeout(() => { if (phaseRef.current !== 'ai_speaking') setVoiceAndSpeak() }, 500)
+    }
 
-    utterance.onend = () => {
+    const handleEnd = () => {
       if (onEndCallback) {
-        onEndCallback();
-        return;
+        onEndCallback()
+        return
       }
       if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
       setPhase('waiting')
       setStatusLabel('Your turn — press the mic or Spacebar to answer')
     }
-    utterance.onerror = () => {
-      if (onEndCallback) {
-        onEndCallback();
-        return;
-      }
-      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
-      setPhase('waiting')
-      setStatusLabel('Your turn — press the mic or Spacebar to answer')
-    }
 
-    synth.speak(utterance)
+    utterance.onend = handleEnd
+    utterance.onerror = handleEnd
+    
+    // Safety fallback: If TTS completely breaks in a weird browser, unlock the mic after an estimated time
+    const estimatedMs = Math.max(3000, text.length * 60)
+    setTimeout(() => {
+      if (phaseRef.current === 'ai_speaking') handleEnd()
+    }, estimatedMs + 2000)
+
   }, [])
 
 
@@ -404,23 +414,7 @@ export default function Interview({ email, onComplete }) {
 
 
   // =============================================
-  // EARLY QUIT HELPER
-  // =============================================
-  const checkForEarlyQuit = (text) => {
-    const lower = text.toLowerCase()
-    if (lower.includes('close the interview') || lower.match(/\b(quit|stop|leave|end the interview)\b/)) {
-      const confirmEnd = window.confirm("Are you sure you want to end the interview early?");
-      if (confirmEnd) {
-        closedEarlyRef.current = true;
-        triggerGoodbye();
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // =============================================
-  // SPEECH RECOGNITION
+  // SPEECH RECOGNITION (Popup removed)
   // =============================================
   const startListening = useCallback(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
@@ -452,9 +446,7 @@ export default function Interview({ email, onComplete }) {
       const text = finalTextRef.current.trim()
       setLiveTranscript('')
       if (text) {
-        if (!checkForEarlyQuit(text)) {
-          callAI(text, messagesRef.current)
-        }
+        callAI(text, messagesRef.current) // Calls AI directly, no popup
       } else {
         setPhase('waiting')
         setStatusLabel('No speech detected. Press the mic and try again.')
@@ -476,7 +468,7 @@ export default function Interview({ email, onComplete }) {
     setPhase('listening')
     setStatusLabel('Listening... speak your answer clearly')
     recognition.start()
-  }, [callAI, triggerGoodbye])
+  }, [callAI])
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) recognitionRef.current.stop()
@@ -487,10 +479,8 @@ export default function Interview({ email, onComplete }) {
     if (!text) return
     setTextDraft('')
     setShowTextInput(false)
-    if (!checkForEarlyQuit(text)) {
-      callAI(text, messagesRef.current)
-    }
-  }, [textDraft, callAI, triggerGoodbye])
+    callAI(text, messagesRef.current) // Calls AI directly, no popup
+  }, [textDraft, callAI])
 
   // Spacebar shortcut
   useEffect(() => {

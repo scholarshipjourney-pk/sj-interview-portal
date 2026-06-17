@@ -1,7 +1,5 @@
 // netlify/functions/check-email.js
-// Checks if a candidate email is whitelisted and unused
-
-import { getStore } from '@netlify/blobs'
+// Checks if a candidate email is on the Environment Variable whitelist
 
 export const handler = async (event) => {
   const headers = {
@@ -32,8 +30,7 @@ export const handler = async (event) => {
 
   // -------------------------------------------------------
   // TEST MODE: set TEST_MODE=true in your .env to bypass
-  // the whitelist and let any email through. Remove or set
-  // to false before going live with real candidates.
+  // the whitelist and let any email through. 
   // -------------------------------------------------------
   if (process.env.TEST_MODE === 'true') {
     return { statusCode: 200, headers, body: JSON.stringify({ allowed: true }) }
@@ -41,8 +38,7 @@ export const handler = async (event) => {
 
   // -------------------------------------------------------
   // UNLIMITED ACCESS EMAILS: these emails can enter the
-  // interview as many times as they want. Used for testing
-  // by the Scholarship Journey admin team. Never marked used.
+  // interview as many times as they want. 
   // -------------------------------------------------------
   const UNLIMITED_EMAILS = [
     'sarfraz.mb.ahmed2006@gmail.com',
@@ -51,48 +47,29 @@ export const handler = async (event) => {
     return { statusCode: 200, headers, body: JSON.stringify({ allowed: true }) }
   }
 
+  // -------------------------------------------------------
+  // ENVIRONMENT VARIABLE WHITELIST (Bypassing Blobs)
+  // -------------------------------------------------------
   try {
-    const store = getStore('sj-interview-whitelist')
-    let record
+    // Fetch the comma-separated list from Netlify Environment Variables
+    const whitelistedString = process.env.WHITELISTED_EMAILS || ''
+    const allowedEmails = whitelistedString.split(',').map(e => e.trim().toLowerCase())
 
-    try {
-      const raw = await store.get(email)
-      if (raw) record = JSON.parse(raw)
-    } catch {
-      record = null
-    }
-
-    if (!record || !record.allowed) {
+    if (allowedEmails.includes(email)) {
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify({ allowed: false, reason: 'not_whitelisted' }),
+        body: JSON.stringify({ allowed: true }),
       }
     }
 
-    if (record.used) {
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({ allowed: false, reason: 'already_used' }),
-      }
-    }
-
-    // Mark in-progress so they can't open a second tab
-    await store.set(
-      email,
-      JSON.stringify({
-        ...record,
-        inProgress: true,
-        startedAt: new Date().toISOString(),
-      })
-    )
-
+    // If not in the list, block them
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ allowed: true }),
+      body: JSON.stringify({ allowed: false, reason: 'not_whitelisted' }),
     }
+
   } catch (err) {
     console.error('check-email error:', err)
     return {
