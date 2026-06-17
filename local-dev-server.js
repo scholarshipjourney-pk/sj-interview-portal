@@ -30,7 +30,7 @@ try {
 } catch { console.log('  No .env file found') }
 
 const GROQ_API_KEY   = process.env.GROQ_API_KEY  || ''
-const ADMIN_KEY      = process.env.ADMIN_SECRET_KEY || 'test123'
+const ADMIN_KEY      = process.env.ADMIN_SECRET_KEY
 const PORT           = 9999
 const UNLIMITED      = ['sarfraz.mb.ahmed2006@gmail.com']
 
