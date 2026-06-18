@@ -1,5 +1,7 @@
 // netlify/functions/check-email.js
-// Checks if a candidate email is on the Environment Variable whitelist
+// Checks Environment Variables for whitelist, and Blobs for used status
+
+import { getStore } from '@netlify/blobs'
 
 export const handler = async (event) => {
   const headers = {
@@ -28,46 +30,52 @@ export const handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ allowed: false, reason: 'invalid_email' }) }
   }
 
-  // -------------------------------------------------------
-  // TEST MODE: set TEST_MODE=true in your .env to bypass
-  // the whitelist and let any email through. 
-  // -------------------------------------------------------
   if (process.env.TEST_MODE === 'true') {
     return { statusCode: 200, headers, body: JSON.stringify({ allowed: true }) }
   }
 
-  // -------------------------------------------------------
-  // UNLIMITED ACCESS EMAILS: these emails can enter the
-  // interview as many times as they want. 
-  // -------------------------------------------------------
-  const UNLIMITED_EMAILS = [
-    'sarfraz.mb.ahmed2006@gmail.com',
-  ]
-  if (UNLIMITED_EMAILS.includes(email)) {
-    return { statusCode: 200, headers, body: JSON.stringify({ allowed: true }) }
-  }
+  const UNLIMITED_EMAILS = ['sarfraz.mb.ahmed2006@gmail.com']
 
-  // -------------------------------------------------------
-  // ENVIRONMENT VARIABLE WHITELIST (Bypassing Blobs)
-  // -------------------------------------------------------
   try {
-    // Fetch the comma-separated list from Netlify Environment Variables
+    // 1. CHECK WHITELIST (Environment Variables)
     const whitelistedString = process.env.WHITELISTED_EMAILS || ''
     const allowedEmails = whitelistedString.split(',').map(e => e.trim().toLowerCase())
 
-    if (allowedEmails.includes(email)) {
+    const isWhitelisted = allowedEmails.includes(email) || UNLIMITED_EMAILS.includes(email)
+    
+    if (!isWhitelisted) {
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify({ allowed: true }),
+        body: JSON.stringify({ allowed: false, reason: 'not_whitelisted' }),
       }
     }
 
-    // If not in the list, block them
+    // Unlimited emails bypass the "already used" database check
+    if (UNLIMITED_EMAILS.includes(email)) {
+      return { statusCode: 200, headers, body: JSON.stringify({ allowed: true }) }
+    }
+
+    // 2. CHECK DATABASE FOR PREVIOUS USE (Cross-Device Security)
+    const usedEmails = getStore('sj-used-emails')
+    const rawRecord = await usedEmails.get(email)
+    
+    if (rawRecord) {
+      const record = JSON.parse(rawRecord)
+      if (record.used) {
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ allowed: false, reason: 'already_used' }),
+        }
+      }
+    }
+
+    // If on the list and not used, let them in!
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ allowed: false, reason: 'not_whitelisted' }),
+      body: JSON.stringify({ allowed: true }),
     }
 
   } catch (err) {

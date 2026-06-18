@@ -31,7 +31,6 @@ export default function EmailGate({ onVerified }) {
     if (!isValidEmail(trimmed)) { setError('Please enter a valid email address (e.g. name@example.com).'); return }
 
     // ---- ONE-TIME ACCESS CHECK ----
-    // Check if this device already holds a completion receipt for this email address
     const completedEmail = localStorage.getItem('sj_interview_completed_email')
     if (completedEmail && completedEmail.toLowerCase() === trimmed) {
       setError('This email has already been used for an interview on this device. Each candidate gets one attempt only.')
@@ -92,7 +91,7 @@ export default function EmailGate({ onVerified }) {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           margin: '0 auto 18px',
         }}>
-          <CircleIcon wrapper={<RobotIcon />} />
+          <RobotIcon />
         </div>
 
         <h1 style={{ fontSize: '1.55rem', marginBottom: 6 }}>AI Interview Portal</h1>
@@ -146,9 +145,4 @@ export default function EmailGate({ onVerified }) {
       </p>
     </div>
   )
-}
-
-// Helper to keep styling structure simple
-function CircleIcon({ wrapper }) {
-  return wrapper
 }

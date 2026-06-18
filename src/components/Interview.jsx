@@ -30,6 +30,19 @@ function getMaleVoice() {
   )
 }
 
+// ---- Helper: Convert Blob to Base64 ----
+const blobToBase64 = (blob) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      const base64data = reader.result.split(',')[1]
+      resolve(base64data)
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
+}
+
 // ---- AI Avatar Orb ----
 function AiOrb({ phase }) {
   const pulse = phase === 'ai_speaking' || phase === 'listening'
@@ -105,7 +118,6 @@ export default function Interview({ email, onComplete }) {
   const [phase, setPhase]             = useState('initializing')
   const [messages, setMessages]       = useState([])
   const [currentAiText, setCurrentAiText] = useState('')
-  const [liveTranscript, setLiveTranscript] = useState('')
   const [questionIndex, setQuestionIndex] = useState(0)
   const [timeLeft, setTimeLeft]       = useState(TOTAL_SECONDS)
   const [showTextInput, setShowTextInput] = useState(false)
@@ -120,14 +132,18 @@ export default function Interview({ email, onComplete }) {
   const endingFiredRef  = useRef(false)
   const disqualifiedRef = useRef(false)
   const closedEarlyRef  = useRef(false)
-  const recognitionRef  = useRef(null)
   const videoRef        = useRef(null)
   const timerRef        = useRef(null)
-  const finalTextRef    = useRef('')
+  const questionIdxRef  = useRef(0)
+  
+  // MediaRecorder Refs for Audio Tracking
+  const mediaRecorderRef = useRef(null)
+  const audioChunksRef   = useRef([])
 
   useEffect(() => { messagesRef.current = messages },    [messages])
   useEffect(() => { phaseRef.current    = phase },       [phase])
   useEffect(() => { timeLeftRef.current = timeLeft },    [timeLeft])
+  useEffect(() => { questionIdxRef.current = questionIndex }, [questionIndex])
 
   // ---- Camera ----
   useEffect(() => {
@@ -160,15 +176,15 @@ export default function Interview({ email, onComplete }) {
     setPhase('ended')
     setStatusLabel('Interview complete')
 
-    // SAVE THE RECEIPT: Stop them from taking it again
+    // SAVE THE RECEIPT: Stop them from taking it again on this device
     localStorage.setItem('sj_interview_completed_email', email)
 
-    // KILL HARDWARE: Explicitly stop camera and mic
+    // KILL HARDWARE
     if (videoRef.current?.srcObject) {
       videoRef.current.srcObject.getTracks().forEach((track) => track.stop())
     }
-    if (recognitionRef.current) {
-      recognitionRef.current.stop()
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop()
     }
     window.speechSynthesis?.cancel()
 
@@ -188,9 +204,77 @@ export default function Interview({ email, onComplete }) {
     setTimeout(() => onComplete(), 1500)
   }, [email, onComplete])
 
+
+  // =============================================
+  // TEXT TO SPEECH (Sentence Chunker to Fix 15s Bug)
+  // =============================================
+  const speakText = useCallback((text, onEndCallback = null) => {
+    const synth = window.speechSynthesis
+    synth.cancel() // Stop anything currently playing
+
+    // Split text into sentences so Chrome doesn't timeout after 15 seconds
+    const sentences = text.match(/[^.!?]+[.!?]+|\s*[^.!?]+$/g) || [text]
+    let currentIndex = 0
+
+    const playNext = () => {
+      if (currentIndex >= sentences.length) {
+        if (onEndCallback) {
+          onEndCallback()
+        } else {
+          if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
+          setPhase('waiting')
+          setStatusLabel('Your turn — press the mic or Spacebar to answer')
+        }
+        return
+      }
+
+      const chunk = sentences[currentIndex].trim()
+      if (!chunk) {
+        currentIndex++
+        playNext()
+        return
+      }
+
+      const utterance = new SpeechSynthesisUtterance(chunk)
+      utterance.rate   = 0.92
+      utterance.pitch  = 0.95
+      utterance.volume = 1.0
+
+      const maleVoice = getMaleVoice()
+      if (maleVoice) utterance.voice = maleVoice
+
+      if (currentIndex === 0) {
+        setPhase('ai_speaking')
+        setStatusLabel('Sarfraz is speaking...')
+      }
+
+      utterance.onend = () => {
+        currentIndex++
+        playNext()
+      }
+
+      utterance.onerror = () => {
+        currentIndex++
+        playNext() // Keep going even if one chunk errors
+      }
+
+      synth.speak(utterance)
+    }
+
+    if (synth.getVoices().length > 0) {
+      playNext()
+    } else {
+      synth.onvoiceschanged = playNext
+      setTimeout(() => { if (phaseRef.current !== 'ai_speaking') playNext() }, 500)
+    }
+  }, [])
+
+
   // ---- END INTERVIEW — get goodbye from AI, then close ----
   const triggerGoodbye = useCallback(async () => {
-    if (recognitionRef.current) recognitionRef.current.stop()
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop()
+    }
     window.speechSynthesis?.cancel()
     setPhase('ending')
     setStatusLabel('Wrapping up...')
@@ -201,59 +285,59 @@ export default function Interview({ email, onComplete }) {
     }
     const endMessages = [...messagesRef.current, endMsg]
 
+    // Fallback text just in case the API drops out at the last second
+    let safeReply = "Thank you for taking the time to speak with me today. We appreciate your interest in Scholarship Journey. Our team will review your responses and be in touch soon. Take care, and goodbye!"
+
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: endMessages }),
       })
-      const { reply } = await res.json()
-      const safeReply = cleanText(reply)
-
-      setCurrentAiText(safeReply)
-
-      const synth     = window.speechSynthesis
-      const utterance = new SpeechSynthesisUtterance(safeReply)
-      utterance.rate  = 0.88
-      utterance.pitch = 0.95
-
-      const maleVoice = getMaleVoice()
-      if (maleVoice) utterance.voice = maleVoice
-
-      let done = false
-      const finish = () => {
-        if (done) return
-        done = true
-        completeInterviewNow()
+      if (res.ok) {
+        const data = await res.json()
+        if (data.reply) safeReply = cleanText(data.reply)
       }
-
-      utterance.onend  = finish
-      utterance.onerror = finish
-      const estimatedMs = Math.max(6000, safeReply.length * 75)
-      setTimeout(finish, estimatedMs + 3000)
-
-      synth.speak(utterance)
     } catch {
-      completeInterviewNow()
+      console.warn("Goodbye API failed, using fallback text.")
     }
-  }, [completeInterviewNow])
+
+    setCurrentAiText(safeReply)
+    speakText(safeReply, () => completeInterviewNow())
+    
+  }, [completeInterviewNow, speakText])
 
 
-  // ---- Tab change = END interview immediately ----
+  // ---- Tab change = END interview immediately (With 2-Min Grace Period) ----
   useEffect(() => {
+    const checkGracePeriod = () => {
+       const timeSpent = TOTAL_SECONDS - timeLeftRef.current
+       // If less than 2 mins have passed AND they haven't answered anything, let them refresh without penalty
+       return timeSpent < 120 && questionIdxRef.current === 0
+    }
+
     const onHide = () => {
       if (!document.hidden) return
       if (phaseRef.current === 'ended' || phaseRef.current === 'ending') return
+      
+      // Grace period check
+      if (checkGracePeriod()) return
+
       closedEarlyRef.current  = true
       disqualifiedRef.current = true
       if (!endingFiredRef.current) {
         endingFiredRef.current = true
         clearInterval(timerRef.current)
-        completeInterviewNow() // Includes the hardware kill logic
+        completeInterviewNow() 
       }
     }
 
     const onUnload = () => {
+      if (phaseRef.current === 'ended' || phaseRef.current === 'ending') return
+      
+      // Grace period check
+      if (checkGracePeriod()) return
+
       navigator.sendBeacon(
         '/api/complete-interview',
         JSON.stringify({
@@ -299,55 +383,6 @@ export default function Interview({ email, onComplete }) {
 
 
   // =============================================
-  // TEXT TO SPEECH (Robust Voice Loading)
-  // =============================================
-  const speakText = useCallback((text, onEndCallback = null) => {
-    const synth = window.speechSynthesis
-    synth.cancel()
-
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.rate   = 0.92
-    utterance.pitch  = 0.95
-    utterance.volume = 1.0
-
-    const setVoiceAndSpeak = () => {
-      const maleVoice = getMaleVoice()
-      if (maleVoice) utterance.voice = maleVoice
-      
-      setPhase('ai_speaking')
-      setStatusLabel('Sarfraz is speaking...')
-      synth.speak(utterance)
-    }
-
-    if (synth.getVoices().length > 0) {
-      setVoiceAndSpeak()
-    } else {
-      synth.onvoiceschanged = setVoiceAndSpeak
-      setTimeout(() => { if (phaseRef.current !== 'ai_speaking') setVoiceAndSpeak() }, 500)
-    }
-
-    const handleEnd = () => {
-      if (onEndCallback) {
-        onEndCallback()
-        return
-      }
-      if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
-      setPhase('waiting')
-      setStatusLabel('Your turn — press the mic or Spacebar to answer')
-    }
-
-    utterance.onend = handleEnd
-    utterance.onerror = handleEnd
-    
-    const estimatedMs = Math.max(3000, text.length * 60)
-    setTimeout(() => {
-      if (phaseRef.current === 'ai_speaking') handleEnd()
-    }, estimatedMs + 2000)
-
-  }, [])
-
-
-  // =============================================
   // CALL GROQ AI
   // =============================================
   const callAI = useCallback(async (userContent, currentMessages) => {
@@ -381,7 +416,7 @@ export default function Interview({ email, onComplete }) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
       const { reply } = await res.json()
-      const isEnding = reply.includes('[END_INTERVIEW]') // Catch AI finishing early
+      const isEnding = reply.includes('[END_INTERVIEW]') 
       const safeReply = cleanText(reply)
 
       const withReply = [...updated, { role: 'assistant', content: safeReply }]
@@ -412,78 +447,74 @@ export default function Interview({ email, onComplete }) {
 
 
   // =============================================
-  // SPEECH RECOGNITION (Hardened State Sync)
+  // AUDIO RECORDING (Whisper API Upgrade)
   // =============================================
-  const startListening = useCallback(() => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR) {
-      setShowTextInput(true)
-      setStatusLabel('Type your answer below')
-      return
-    }
+  const startListening = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mediaRecorder = new MediaRecorder(stream)
+      
+      mediaRecorderRef.current = mediaRecorder
+      audioChunksRef.current = []
 
-    if (recognitionRef.current) {
-      recognitionRef.current.stop()
-    }
-
-    const recognition        = new SR()
-    recognition.continuous   = true
-    recognition.interimResults = true
-    recognition.lang         = 'en-US'
-    finalTextRef.current     = ''
-
-    recognition.onstart = () => {
-      setPhase('listening')
-      setStatusLabel('Listening... speak your answer clearly')
-    }
-
-    recognition.onresult = (event) => {
-      let interim = ''
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (event.results[i].isFinal) {
-          finalTextRef.current += event.results[i][0].transcript + ' '
-        } else {
-          interim += event.results[i][0].transcript
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
         }
       }
-      setLiveTranscript(finalTextRef.current + interim)
-    }
 
-    recognition.onend = () => {
-      const text = finalTextRef.current.trim()
-      setLiveTranscript('')
-      recognitionRef.current = null 
-      
-      if (text) {
-        callAI(text, messagesRef.current)
-      } else {
-        setPhase('waiting')
-        setStatusLabel('No speech detected. Press the mic and try again.')
+      mediaRecorder.onstart = () => {
+        setPhase('listening')
+        setStatusLabel('Recording... Speak your answer, then click Stop.')
       }
-    }
 
-    recognition.onerror = (e) => {
-      setLiveTranscript('')
-      recognitionRef.current = null
-      
-      if (e.error === 'no-speech') return 
+      mediaRecorder.onstop = async () => {
+        setPhase('processing')
+        setStatusLabel('Transcribing audio... Please wait.')
+        
+        // Stop the mic tracks to free up the hardware
+        stream.getTracks().forEach(track => track.stop())
+        
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        
+        try {
+          const base64Audio = await blobToBase64(audioBlob)
+          
+          const res = await fetch('/api/transcribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audio: base64Audio })
+          })
 
-      if (e.error === 'not-allowed') {
-        setShowTextInput(true)
-        setStatusLabel('Mic blocked. Type your answer below.')
-      } else {
-        setPhase('waiting')
-        setStatusLabel('Mic error. Press to try again or use the type option.')
+          if (!res.ok) throw new Error('Transcription failed')
+          
+          const data = await res.json()
+          const text = data.text?.trim()
+
+          if (text) {
+            callAI(text, messagesRef.current)
+          } else {
+            setPhase('waiting')
+            setStatusLabel('No speech detected. Press the mic and try again.')
+          }
+        } catch (error) {
+          console.error('Transcription API error:', error)
+          setPhase('waiting')
+          setStatusLabel('Transcription error. Press mic to try again or use type option.')
+        }
       }
-    }
 
-    recognitionRef.current = recognition
-    recognition.start()
+      mediaRecorder.start()
+    } catch (err) {
+      console.error('Mic error:', err)
+      setShowTextInput(true)
+      setStatusLabel('Mic blocked or unavailable. Type your answer below.')
+    }
   }, [callAI])
 
   const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop()
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop()
     }
   }, [])
 
@@ -606,8 +637,8 @@ export default function Interview({ email, onComplete }) {
           <div style={{ width: '100%', padding: '10px 16px', background: 'rgba(0,0,0,0.2)', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{
               width: 8, height: 8, borderRadius: '50%', flexShrink: 0, transition: 'all 0.3s',
-              background: isListening ? '#60d0ff' : phase === 'ai_speaking' ? 'var(--gold)' : (phase === 'processing' || phase === 'initializing') ? 'rgba(255,255,255,0.2)' : '#80e8a0',
-              boxShadow: isListening ? '0 0 8px #60d0ff' : phase === 'ai_speaking' ? '0 0 8px var(--gold)' : 'none',
+              background: isListening ? '#ff6060' : phase === 'ai_speaking' ? 'var(--gold)' : (phase === 'processing' || phase === 'initializing') ? 'rgba(255,255,255,0.2)' : '#80e8a0',
+              boxShadow: isListening ? '0 0 8px #ff6060' : phase === 'ai_speaking' ? '0 0 8px var(--gold)' : 'none',
             }} />
             <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>{statusLabel}</span>
           </div>
@@ -615,9 +646,12 @@ export default function Interview({ email, onComplete }) {
           {/* Controls */}
           {!isEnding && (
             <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {/* Live transcript */}
-              {(isListening || liveTranscript) && (
-                <div className="transcript-box">{liveTranscript || 'Listening...'}</div>
+              
+              {/* Recording Status Box */}
+              {isListening && (
+                <div className="transcript-box" style={{ color: '#ff8080', fontWeight: 'bold' }}>
+                  🔴 Recording in progress... Speak your answer, then click Stop.
+                </div>
               )}
 
               {/* Text fallback */}
