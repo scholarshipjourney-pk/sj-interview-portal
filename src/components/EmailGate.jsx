@@ -32,7 +32,9 @@ export default function EmailGate({ onVerified }) {
 
     // ---- ONE-TIME ACCESS CHECK ----
     const completedEmail = localStorage.getItem('sj_interview_completed_email')
-    if (completedEmail && completedEmail.toLowerCase() === trimmed) {
+    const isAdmin = trimmed === 'sarfraz.mb.ahmed2006@gmail.com'
+    
+    if (completedEmail && completedEmail.toLowerCase() === trimmed && !isAdmin) {
       setError('This email has already been used for an interview on this device. Each candidate gets one attempt only.')
       return
     }
