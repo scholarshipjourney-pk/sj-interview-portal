@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 
-const TOTAL_SECONDS  = 20 * 60  // 20 minutes
-const WARNING_SECONDS = 3 * 60  // warn at 3 minutes remaining
+const TOTAL_SECONDS   = 20 * 60
+const WARNING_SECONDS = 3 * 60
+const MAX_RECORD_MS   = 3 * 60 * 1000  // 3-minute auto-stop safety limit
+const MAX_AUDIO_B64   = 10 * 1024 * 1024 // ~7.5 MB raw audio
 
 function cleanText(text) {
   return (text || '')
@@ -15,50 +17,58 @@ function cleanText(text) {
 function getMaleVoice() {
   const voices = window.speechSynthesis.getVoices()
   return (
-    voices.find(v => v.name.includes('Male') || v.name.includes('Alex') || v.name.includes('Daniel') || v.name.includes('David')) ||
-    voices.find(v => v.name === 'Google US English') ||
     voices.find(v => v.name === 'Google UK English Male') ||
-    voices.find(v => v.name === 'Microsoft David Desktop - English (United States)') ||
-    voices.find(v => v.lang === 'en-US' && v.localService && !v.name.toLowerCase().match(/zira|female|aria|jenny|sonia|libby|natasha|hazel|susan/)) ||
+    voices.find(v => v.name.includes('Male') && v.lang.startsWith('en')) ||
+    voices.find(v => v.name.includes('David') && v.lang.startsWith('en')) ||
+    voices.find(v => v.name.includes('Daniel') && v.lang.startsWith('en')) ||
+    voices.find(v => v.name.includes('Alex') && v.lang.startsWith('en')) ||
+    voices.find(v => v.name === 'Google US English') ||
+    voices.find(v =>
+      v.lang === 'en-US' &&
+      v.localService &&
+      !v.name.toLowerCase().match(/zira|female|aria|jenny|sonia|libby|natasha|hazel|susan/)
+    ) ||
     voices.find(v => v.lang.startsWith('en'))
   )
 }
 
-const blobToBase64 = (blob) => {
-  return new Promise((resolve, reject) => {
+const blobToBase64 = (blob) =>
+  new Promise((resolve, reject) => {
     const reader = new FileReader()
-    reader.onloadend = () => {
-      const base64data = reader.result.split(',')[1]
-      resolve(base64data)
-    }
+    reader.onloadend = () => resolve(reader.result.split(',')[1])
     reader.onerror = reject
     reader.readAsDataURL(blob)
   })
-}
 
 function AiOrb({ phase }) {
   const pulse = phase === 'ai_speaking' || phase === 'listening'
   return (
     <div className="orb-wrapper">
-      {pulse && <div className={`orb-ring orb-ring-1 pulse`} />}
-      {pulse && <div className={`orb-ring orb-ring-2 pulse`} />}
-      <div className={`orb ${phase === 'ai_speaking' ? 'speaking' : phase === 'listening' ? 'listening' : phase === 'processing' ? 'processing' : 'idle'}`} />
+      {pulse && <div className="orb-ring orb-ring-1 pulse" />}
+      {pulse && <div className="orb-ring orb-ring-2 pulse" />}
+      <div
+        className={`orb ${
+          phase === 'ai_speaking' ? 'speaking'
+          : phase === 'listening'  ? 'listening'
+          : phase === 'processing' ? 'processing'
+          : 'idle'
+        }`}
+      />
     </div>
   )
 }
 
 function Timer({ seconds }) {
-  const m   = Math.floor(seconds / 60).toString().padStart(2, '0')
-  const s   = (seconds % 60).toString().padStart(2, '0')
-  const pct = (seconds / TOTAL_SECONDS) * 100
+  const m      = Math.floor(seconds / 60).toString().padStart(2, '0')
+  const s      = (seconds % 60).toString().padStart(2, '0')
+  const pct    = (seconds / TOTAL_SECONDS) * 100
   const warn   = seconds <= WARNING_SECONDS
   const danger = seconds <= 60
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 110 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
         <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', letterSpacing: '0.04em' }}>TIME LEFT</span>
-        <span style={{ fontFamily: 'monospace', fontSize: '1.15rem', fontWeight: 700, color: danger ? '#ff6060' : warn ? 'var(--gold)' : 'var(--text-white)', letterSpacing: '0.06em' }}>
+        <span style={{ fontFamily: 'monospace', fontSize: '1.15rem', fontWeight: 700, letterSpacing: '0.06em', color: danger ? '#ff6060' : warn ? 'var(--gold)' : 'var(--text-white)' }}>
           {m}:{s}
         </span>
       </div>
@@ -81,115 +91,161 @@ function ProgressDots({ current, total = 5 }) {
 }
 
 export default function Interview({ email, onComplete }) {
-  const [phase, setPhase]             = useState('initializing')
-  const [messages, setMessages]       = useState([])
-  const [currentAiText, setCurrentAiText] = useState('')
-  const [questionIndex, setQuestionIndex] = useState(0)
-  const [timeLeft, setTimeLeft]       = useState(TOTAL_SECONDS)
-  const [showTextInput, setShowTextInput] = useState(false)
-  const [textDraft, setTextDraft]     = useState('')
-  const [statusLabel, setStatusLabel] = useState('Connecting...')
+  const [phase,          setPhase]          = useState('initializing')
+  const [messages,       setMessages]       = useState([])
+  const [currentAiText,  setCurrentAiText]  = useState('')
+  const [questionIndex,  setQuestionIndex]  = useState(0)
+  const [timeLeft,       setTimeLeft]       = useState(TOTAL_SECONDS)
+  const [showTextInput,  setShowTextInput]  = useState(false)
+  const [textDraft,      setTextDraft]      = useState('')
+  const [statusLabel,    setStatusLabel]    = useState('Connecting...')
 
-  const messagesRef     = useRef([])
-  const phaseRef        = useRef('initializing')
-  const timeLeftRef     = useRef(TOTAL_SECONDS)
-  const warningFiredRef = useRef(false)
-  const endingFiredRef  = useRef(false)
-  const disqualifiedRef = useRef(false)
-  const closedEarlyRef  = useRef(false)
-  const videoRef        = useRef(null)
-  const timerRef        = useRef(null)
-  const questionIdxRef  = useRef(0)
-  
+  const messagesRef      = useRef([])
+  const phaseRef         = useRef('initializing')
+  const timeLeftRef      = useRef(TOTAL_SECONDS)
+  const warningFiredRef  = useRef(false)
+  const endingFiredRef   = useRef(false)
+  const disqualifiedRef  = useRef(false)
+  const closedEarlyRef   = useRef(false)
+  const videoRef         = useRef(null)
+  const timerRef         = useRef(null)
+  const questionIdxRef   = useRef(0)
   const mediaRecorderRef = useRef(null)
   const audioChunksRef   = useRef([])
+  const micStreamRef     = useRef(null)   // PRE-INITIALIZED mic stream for instant start
+  const recordTimerRef   = useRef(null)   // Auto-stop safety timer
 
-  useEffect(() => { messagesRef.current = messages },    [messages])
-  useEffect(() => { phaseRef.current    = phase },       [phase])
-  useEffect(() => { timeLeftRef.current = timeLeft },    [timeLeft])
+  useEffect(() => { messagesRef.current   = messages },       [messages])
+  useEffect(() => { phaseRef.current      = phase },          [phase])
+  useEffect(() => { timeLeftRef.current   = timeLeft },       [timeLeft])
   useEffect(() => { questionIdxRef.current = questionIndex }, [questionIndex])
 
+  // ---- Camera (video only, no audio) ----
   useEffect(() => {
     const init = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 320, height: 240 }, audio: false })
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: 320, height: 240 },
+          audio: false,
+        })
         if (videoRef.current) videoRef.current.srcObject = stream
       } catch {}
     }
     init()
     return () => {
-      if (videoRef.current?.srcObject) videoRef.current.srcObject.getTracks().forEach(t => t.stop())
+      if (videoRef.current?.srcObject) {
+        videoRef.current.srcObject.getTracks().forEach(t => t.stop())
+      }
     }
   }, [])
 
+  // ---- PRE-INITIALIZE MIC for instant recording start ----
+  // This requests mic permission ONCE upfront so when the user clicks
+  // the mic button there is zero delay — the stream is already open.
+  useEffect(() => {
+    const initMic = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        micStreamRef.current = stream
+      } catch {
+        // Mic unavailable — text fallback will be shown when user tries to record
+      }
+    }
+    initMic()
+    return () => {
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach(t => t.stop())
+        micStreamRef.current = null
+      }
+    }
+  }, [])
+
+  // ---- Pre-load TTS voices ----
   useEffect(() => {
     if (window.speechSynthesis.getVoices().length === 0) {
       window.speechSynthesis.addEventListener('voiceschanged', () => {})
     }
   }, [])
 
+  // =============================================
+  // COMPLETE INTERVIEW — kills all hardware
+  // =============================================
   const completeInterviewNow = useCallback(async () => {
     setPhase('ended')
     setStatusLabel('Interview complete')
     localStorage.setItem('sj_interview_completed_email', email)
 
-    if (videoRef.current?.srcObject) videoRef.current.srcObject.getTracks().forEach((track) => track.stop())
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') mediaRecorderRef.current.stop()
+    // Stop video
+    if (videoRef.current?.srcObject) {
+      videoRef.current.srcObject.getTracks().forEach(t => t.stop())
+    }
+    // Stop mic stream
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach(t => t.stop())
+      micStreamRef.current = null
+    }
+    // Stop active recording
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop()
+    }
+    // Stop TTS
     window.speechSynthesis?.cancel()
+    // Clear auto-stop timer
+    if (recordTimerRef.current) clearTimeout(recordTimerRef.current)
 
     try {
       await fetch('/api/complete-interview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, disqualified: disqualifiedRef.current, closedEarly: closedEarlyRef.current, messages: messagesRef.current }),
+        body: JSON.stringify({
+          email,
+          disqualified: disqualifiedRef.current,
+          closedEarly:  closedEarlyRef.current,
+          messages:     messagesRef.current,
+        }),
       })
     } catch {}
 
     setTimeout(() => onComplete(), 1500)
   }, [email, onComplete])
 
+  // =============================================
+  // TTS — sentence-chunked to avoid cutoffs
+  // =============================================
   const speakText = useCallback((text, onEndCallback = null) => {
     const synth = window.speechSynthesis
-    synth.cancel() 
+    synth.cancel()
 
     const sentences = text.match(/[^.!?]+[.!?]+|\s*[^.!?]+$/g) || [text]
-    let currentIndex = 0
+    let idx = 0
 
     const playNext = () => {
-      if (currentIndex >= sentences.length) {
-        if (onEndCallback) {
-          onEndCallback()
-        } else {
-          if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
-          setPhase('waiting')
-          setStatusLabel('Your turn — press the mic or Spacebar to answer')
-        }
+      if (idx >= sentences.length) {
+        if (onEndCallback) { onEndCallback(); return }
+        if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
+        setPhase('waiting')
+        setStatusLabel('Your turn — press the mic or Spacebar to answer')
         return
       }
 
-      const chunk = sentences[currentIndex].trim()
-      if (!chunk) {
-        currentIndex++
-        playNext()
-        return
-      }
+      const chunk = sentences[idx].trim()
+      if (!chunk) { idx++; playNext(); return }
 
-      const utterance = new SpeechSynthesisUtterance(chunk)
-      utterance.rate   = 0.92
-      utterance.pitch  = 0.95
-      utterance.volume = 1.0
+      const utterance    = new SpeechSynthesisUtterance(chunk)
+      utterance.rate     = 0.92
+      utterance.pitch    = 0.95
+      utterance.volume   = 1.0
 
-      const maleVoice = getMaleVoice()
-      if (maleVoice) utterance.voice = maleVoice
+      const voice = getMaleVoice()
+      if (voice) utterance.voice = voice
 
-      if (currentIndex === 0) {
+      if (idx === 0) {
         setPhase('ai_speaking')
         setStatusLabel('Sarfraz is speaking...')
       }
 
-      utterance.onend = () => { currentIndex++; playNext() }
-      utterance.onerror = () => { currentIndex++; playNext() }
-
+      utterance.onend   = () => { idx++; playNext() }
+      utterance.onerror = () => { idx++; playNext() }
       synth.speak(utterance)
     }
 
@@ -201,22 +257,30 @@ export default function Interview({ email, onComplete }) {
     }
   }, [])
 
+  // =============================================
+  // GOODBYE + CLOSE
+  // =============================================
   const triggerGoodbye = useCallback(async () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') mediaRecorderRef.current.stop()
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop()
+    }
     window.speechSynthesis?.cancel()
     setPhase('ending')
     setStatusLabel('Wrapping up...')
 
-    const endMsg = { role: 'user', content: '[END_INTERVIEW] The interview is ending. Please give your warm, genuine closing remarks.' }
-    const endMessages = [...messagesRef.current, endMsg]
+    const endMsg = {
+      role: 'user',
+      content: '[END_INTERVIEW] The interview is ending. Please give your warm, genuine closing remarks.',
+    }
 
-    let safeReply = "Thank you for taking the time to speak with me today. We appreciate your interest in Scholarship Journey. Our team will review your responses and be in touch soon. Take care, and goodbye!"
+    // Fallback goodbye in case API fails
+    let safeReply = "Thank you so much for taking the time to speak with me today. We really appreciate your interest in Scholarship Journey. Our team will review your responses carefully and will be in touch soon. Best of luck!"
 
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: endMessages }),
+        body: JSON.stringify({ messages: [...messagesRef.current, endMsg] }),
       })
       if (res.ok) {
         const data = await res.json()
@@ -226,33 +290,35 @@ export default function Interview({ email, onComplete }) {
 
     setCurrentAiText(safeReply)
     speakText(safeReply, () => completeInterviewNow())
-    
   }, [completeInterviewNow, speakText])
 
+  // ---- Tab hide = immediate end (with grace period) ----
   useEffect(() => {
-    const checkGracePeriod = () => {
-       const timeSpent = TOTAL_SECONDS - timeLeftRef.current
-       return timeSpent < 120 && questionIdxRef.current === 0
+    const checkGrace = () => {
+      const spent = TOTAL_SECONDS - timeLeftRef.current
+      return spent < 120 && questionIdxRef.current === 0
     }
 
     const onHide = () => {
       if (!document.hidden) return
       if (phaseRef.current === 'ended' || phaseRef.current === 'ending') return
-      if (checkGracePeriod()) return
-
+      if (checkGrace()) return
       closedEarlyRef.current  = true
       disqualifiedRef.current = true
       if (!endingFiredRef.current) {
         endingFiredRef.current = true
         clearInterval(timerRef.current)
-        completeInterviewNow() 
+        completeInterviewNow()
       }
     }
 
     const onUnload = () => {
       if (phaseRef.current === 'ended' || phaseRef.current === 'ending') return
-      if (checkGracePeriod()) return
-      navigator.sendBeacon('/api/complete-interview', JSON.stringify({ email, disqualified: true, closedEarly: true, messages: messagesRef.current }))
+      if (checkGrace()) return
+      navigator.sendBeacon(
+        '/api/complete-interview',
+        JSON.stringify({ email, disqualified: true, closedEarly: true, messages: messagesRef.current })
+      )
     }
 
     document.addEventListener('visibilitychange', onHide)
@@ -263,6 +329,7 @@ export default function Interview({ email, onComplete }) {
     }
   }, [email, completeInterviewNow])
 
+  // ---- Countdown ----
   useEffect(() => {
     timerRef.current = setInterval(() => {
       setTimeLeft(prev => {
@@ -281,6 +348,9 @@ export default function Interview({ email, onComplete }) {
     return () => clearInterval(timerRef.current)
   }, [triggerGoodbye])
 
+  // =============================================
+  // CALL AI
+  // =============================================
   const callAI = useCallback(async (userContent, currentMessages) => {
     setPhase('processing')
     setStatusLabel('Sarfraz is thinking...')
@@ -292,7 +362,6 @@ export default function Interview({ email, onComplete }) {
 
     const newMsg  = { role: 'user', content }
     const updated = userContent === 'START_INTERVIEW' ? [newMsg] : [...currentMessages, newMsg]
-
     setMessages(updated)
     messagesRef.current = updated
 
@@ -302,12 +371,13 @@ export default function Interview({ email, onComplete }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: updated }),
       })
-
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
-      const { reply } = await res.json()
-      const isEnding = reply.includes('[END_INTERVIEW]') 
-      const safeReply = cleanText(reply)
+      const { reply }  = await res.json()
+      // FIX: guard against undefined reply before calling .includes
+      const replyText  = reply || ''
+      const isEnding   = replyText.includes('[END_INTERVIEW]')
+      const safeReply  = cleanText(replyText)
 
       const withReply = [...updated, { role: 'assistant', content: safeReply }]
       setMessages(withReply)
@@ -320,8 +390,7 @@ export default function Interview({ email, onComplete }) {
       } else {
         speakText(safeReply)
       }
-
-    } catch (err) {
+    } catch {
       setStatusLabel('Connection issue. Press the mic to try again.')
       setPhase('waiting')
     }
@@ -332,63 +401,97 @@ export default function Interview({ email, onComplete }) {
     return () => clearTimeout(t)
   }, [callAI])
 
+  // =============================================
+  // MIC — uses PRE-INITIALIZED stream for instant start
+  // =============================================
   const startListening = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mediaRecorder = new MediaRecorder(stream)
-      
-      mediaRecorderRef.current = mediaRecorder
-      audioChunksRef.current = []
+    // Use pre-initialized stream if available; otherwise request now (fallback)
+    let stream = micStreamRef.current
 
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) audioChunksRef.current.push(event.data)
+    if (!stream || stream.getTracks().some(t => t.readyState === 'ended')) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        micStreamRef.current = stream
+      } catch {
+        setShowTextInput(true)
+        setStatusLabel('Mic blocked or unavailable. Type your answer below.')
+        return
       }
-
-      mediaRecorder.onstart = () => {
-        setPhase('listening')
-        setStatusLabel('Recording... Speak your answer, then click Stop.')
-      }
-
-      mediaRecorder.onstop = async () => {
-        setPhase('processing')
-        setStatusLabel('Transcribing audio... Please wait.')
-        stream.getTracks().forEach(track => track.stop())
-        
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
-        
-        try {
-          const base64Audio = await blobToBase64(audioBlob)
-          const res = await fetch('/api/transcribe', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ audio: base64Audio })
-          })
-
-          if (!res.ok) throw new Error('Transcription failed')
-          
-          const data = await res.json()
-          const text = data.text?.trim()
-
-          if (text) {
-            callAI(text, messagesRef.current)
-          } else {
-            setPhase('waiting')
-            setStatusLabel('No speech detected. Press the mic and try again.')
-          }
-        } catch (error) {
-          setPhase('waiting')
-          setStatusLabel('Transcription error. Press mic to try again or use type option.')
-        }
-      }
-      mediaRecorder.start()
-    } catch (err) {
-      setShowTextInput(true)
-      setStatusLabel('Mic blocked or unavailable. Type your answer below.')
     }
+
+    const mediaRecorder    = new MediaRecorder(stream)
+    mediaRecorderRef.current = mediaRecorder
+    audioChunksRef.current   = []
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunksRef.current.push(e.data)
+    }
+
+    mediaRecorder.onstart = () => {
+      setPhase('listening')
+      setStatusLabel('Recording... Speak your answer, then click Stop.')
+    }
+
+    mediaRecorder.onstop = async () => {
+      if (recordTimerRef.current) {
+        clearTimeout(recordTimerRef.current)
+        recordTimerRef.current = null
+      }
+      setPhase('processing')
+      setStatusLabel('Transcribing your answer...')
+
+      const audioBlob   = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+      try {
+        const base64Audio = await blobToBase64(audioBlob)
+
+        // Guard: reject oversized audio
+        if (base64Audio.length > MAX_AUDIO_B64) {
+          setPhase('waiting')
+          setStatusLabel('Recording too long. Please keep answers under 3 minutes.')
+          return
+        }
+
+        const res  = await fetch('/api/transcribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audio: base64Audio }),
+        })
+        if (!res.ok) throw new Error('Transcription failed')
+
+        const data = await res.json()
+        const text = (data.text || '').trim()
+
+        if (text) {
+          callAI(text, messagesRef.current)
+        } else {
+          setPhase('waiting')
+          setStatusLabel('No speech detected. Press the mic and try again.')
+        }
+      } catch {
+        setPhase('waiting')
+        setStatusLabel('Transcription error. Press mic to retry or type below.')
+      }
+    }
+
+    mediaRecorder.start()
+
+    // Safety: auto-stop after MAX_RECORD_MS to avoid infinite recording
+    recordTimerRef.current = setTimeout(() => {
+      if (mediaRecorderRef.current?.state === 'recording') {
+        mediaRecorderRef.current.stop()
+      }
+    }, MAX_RECORD_MS)
+
   }, [callAI])
 
   const stopListening = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') mediaRecorderRef.current.stop()
+    if (recordTimerRef.current) {
+      clearTimeout(recordTimerRef.current)
+      recordTimerRef.current = null
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop()
+    }
   }, [])
 
   const handleTextSubmit = useCallback(() => {
@@ -399,6 +502,7 @@ export default function Interview({ email, onComplete }) {
     callAI(text, messagesRef.current)
   }, [textDraft, callAI])
 
+  // Spacebar shortcut
   useEffect(() => {
     const handler = (e) => {
       if (e.code !== 'Space') return
@@ -412,11 +516,11 @@ export default function Interview({ email, onComplete }) {
     return () => window.removeEventListener('keydown', handler)
   }, [phase, startListening, stopListening])
 
-  const canInteract  = phase === 'waiting'
-  const isListening  = phase === 'listening'
-  const isEnding     = phase === 'ending' || phase === 'ended'
-  const timeWarn     = timeLeft <= WARNING_SECONDS
-  const timeDanger   = timeLeft <= 60
+  const canInteract = phase === 'waiting'
+  const isListening = phase === 'listening'
+  const isEnding    = phase === 'ending' || phase === 'ended'
+  const timeWarn    = timeLeft <= WARNING_SECONDS
+  const timeDanger  = timeLeft <= 60
 
   const displayMessages = messages
     .filter(m => m.content !== 'START_INTERVIEW' && !m.content.includes('[END_INTERVIEW]'))
@@ -425,9 +529,12 @@ export default function Interview({ email, onComplete }) {
 
   return (
     <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', flexDirection: 'column', padding: 16 }}>
+
+      {/* TOP BAR */}
       <div className="glass" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', marginBottom: 16, gap: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <img src="/logo.png" alt="Scholarship Journey" style={{ height: 36, width: 'auto', objectFit: 'contain' }} onError={e => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex' }} />
+          <img src="/logo.png" alt="Scholarship Journey" style={{ height: 36, width: 'auto', objectFit: 'contain' }}
+            onError={e => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex' }} />
           <div className="sj-logo-icon" style={{ width: 34, height: 34, fontSize: '0.9rem', borderRadius: 8, display: 'none' }}>SJ</div>
           <div>
             <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>Sarfraz Ahmed</div>
@@ -438,7 +545,10 @@ export default function Interview({ email, onComplete }) {
         <Timer seconds={timeLeft} />
       </div>
 
+      {/* MAIN */}
       <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16 }}>
+
+        {/* LEFT: AI panel */}
         <div className="glass-gold" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '28px 24px', gap: 20 }}>
           <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <ProgressDots current={questionIndex} total={5} />
@@ -463,23 +573,36 @@ export default function Interview({ email, onComplete }) {
             </div>
           </div>
 
+          {/* Status indicator */}
           <div style={{ width: '100%', padding: '10px 16px', background: 'rgba(0,0,0,0.2)', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, transition: 'all 0.3s', background: isListening ? '#ff6060' : phase === 'ai_speaking' ? 'var(--gold)' : (phase === 'processing' || phase === 'initializing') ? 'rgba(255,255,255,0.2)' : '#80e8a0', boxShadow: isListening ? '0 0 8px #ff6060' : phase === 'ai_speaking' ? '0 0 8px var(--gold)' : 'none' }} />
+            <div style={{
+              width: 8, height: 8, borderRadius: '50%', flexShrink: 0, transition: 'all 0.3s',
+              background: isListening ? '#ff6060' : phase === 'ai_speaking' ? 'var(--gold)' : (phase === 'processing' || phase === 'initializing') ? 'rgba(255,255,255,0.2)' : '#80e8a0',
+              boxShadow: isListening ? '0 0 8px #ff6060' : phase === 'ai_speaking' ? '0 0 8px var(--gold)' : 'none',
+            }} />
             <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>{statusLabel}</span>
           </div>
 
+          {/* Controls */}
           {!isEnding && (
             <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
-              
               {showTextInput && (
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <input className="input" placeholder="Type your answer and press Enter..." value={textDraft} onChange={e => setTextDraft(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleTextSubmit()} autoFocus />
-                  <button className="btn btn-gold" style={{ padding: '14px 18px', flexShrink: 0 }} onClick={handleTextSubmit} disabled={!textDraft.trim()}>Send</button>
+                  <input className="input" placeholder="Type your answer and press Enter..."
+                    value={textDraft} onChange={e => setTextDraft(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleTextSubmit()} autoFocus />
+                  <button className="btn btn-gold" style={{ padding: '14px 18px', flexShrink: 0 }}
+                    onClick={handleTextSubmit} disabled={!textDraft.trim()}>Send</button>
                 </div>
               )}
 
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
-                <button className={`mic-btn ${isListening ? 'recording' : ''}`} onClick={isListening ? stopListening : startListening} disabled={!canInteract && !isListening} title={isListening ? 'Click to stop' : 'Click to answer'}>
+                <button
+                  className={`mic-btn ${isListening ? 'recording' : ''}`}
+                  onClick={isListening ? stopListening : startListening}
+                  disabled={!canInteract && !isListening}
+                  title={isListening ? 'Click to stop recording' : 'Click to answer'}
+                >
                   {isListening ? '⏹' : '🎙️'}
                 </button>
 
@@ -488,12 +611,14 @@ export default function Interview({ email, onComplete }) {
                     {isListening ? 'Recording... click to stop' : canInteract ? 'Press mic to answer' : 'Please wait'}
                   </div>
                   <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                    {isListening ? 'Speak clearly into your microphone' : 'or press Spacebar'}
+                    {isListening ? 'Speak clearly, then click stop' : 'or press Spacebar'}
                   </div>
                 </div>
 
                 {!showTextInput && (
-                  <button className="btn btn-ghost" style={{ padding: '8px 14px', fontSize: '0.78rem', marginLeft: 'auto' }} onClick={() => { setShowTextInput(true); setStatusLabel('Type your answer below') }} disabled={!canInteract}>
+                  <button className="btn btn-ghost" style={{ padding: '8px 14px', fontSize: '0.78rem', marginLeft: 'auto' }}
+                    onClick={() => { setShowTextInput(true); setStatusLabel('Type your answer below') }}
+                    disabled={!canInteract}>
                     Type instead
                   </button>
                 )}
@@ -508,6 +633,7 @@ export default function Interview({ email, onComplete }) {
           )}
         </div>
 
+        {/* RIGHT: Camera + log */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="glass" style={{ padding: 10, aspectRatio: '4/3', position: 'relative', overflow: 'hidden' }}>
             <video ref={videoRef} autoPlay muted playsInline className="candidate-video" style={{ borderRadius: 8 }} />
@@ -522,7 +648,12 @@ export default function Interview({ email, onComplete }) {
             </div>
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
               {displayMessages.map((m, i) => (
-                <div key={i} style={{ padding: '8px 10px', borderRadius: 8, fontSize: '0.76rem', lineHeight: 1.55, background: m.role === 'assistant' ? 'rgba(253,179,2,0.08)' : 'rgba(255,255,255,0.04)', borderLeft: `2px solid ${m.role === 'assistant' ? 'var(--gold)' : 'rgba(255,255,255,0.15)'}`, color: m.role === 'assistant' ? 'var(--text-white)' : 'var(--text-secondary)' }}>
+                <div key={i} style={{
+                  padding: '8px 10px', borderRadius: 8, fontSize: '0.76rem', lineHeight: 1.55,
+                  background: m.role === 'assistant' ? 'rgba(253,179,2,0.08)' : 'rgba(255,255,255,0.04)',
+                  borderLeft: `2px solid ${m.role === 'assistant' ? 'var(--gold)' : 'rgba(255,255,255,0.15)'}`,
+                  color: m.role === 'assistant' ? 'var(--text-white)' : 'var(--text-secondary)',
+                }}>
                   <div style={{ fontSize: '0.64rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: m.role === 'assistant' ? 'var(--gold)' : 'var(--text-muted)', marginBottom: 3 }}>
                     {m.role === 'assistant' ? 'Sarfraz' : 'You'}
                   </div>

@@ -1,23 +1,24 @@
 // netlify/functions/add-emails.js
-// Admin-only endpoint to add candidate emails to the interview whitelist
-// Also handles review submissions (no auth required for reviews)
+// Admin-only: adds candidate emails to the sj-interview-whitelist Blobs store
 
 import { getStore } from '@netlify/blobs'
 
+const getBlobStore = (name) =>
+  getStore({
+    name,
+    siteID: process.env.NETLIFY_SITE_ID,
+    token:  process.env.NETLIFY_API_TOKEN,
+  })
+
 export const handler = async (event) => {
   const headers = {
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin':  '*',
     'Access-Control-Allow-Headers': 'Content-Type',
-    'Content-Type': 'application/json',
+    'Content-Type':                 'application/json',
   }
 
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers, body: '' }
-  }
-
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) }
-  }
+  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' }
+  if (event.httpMethod !== 'POST')   return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) }
 
   let body
   try {
@@ -26,89 +27,49 @@ export const handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Bad request' }) }
   }
 
-  const { emails, adminKey } = body
-
-  // Validate admin key
-  const expectedKey = process.env.ADMIN_SECRET_KEY
-  if (!expectedKey || adminKey !== expectedKey) {
-    return {
-      statusCode: 401,
-      headers,
-      body: JSON.stringify({ error: 'Unauthorized — invalid admin key' }),
-    }
+  // Admin key check
+  if (!process.env.ADMIN_SECRET_KEY || body.adminKey !== process.env.ADMIN_SECRET_KEY) {
+    return { statusCode: 401, headers, body: JSON.stringify({ error: 'Unauthorized' }) }
   }
 
-  if (!Array.isArray(emails) || emails.length === 0) {
-    return {
-      statusCode: 400,
-      headers,
-      body: JSON.stringify({ error: 'No emails provided' }),
-    }
-  }
+  const emails = (body.emails || [])
+    .map(e => (e || '').trim().toLowerCase())
+    .filter(e => e.includes('@') && e.includes('.'))
 
-  // Sanitize emails
-  const clean = emails
-    .map((e) => (e || '').trim().toLowerCase())
-    .filter((e) => e.includes('@') && e.includes('.'))
-
-  if (clean.length === 0) {
-    return {
-      statusCode: 400,
-      headers,
-      body: JSON.stringify({ error: 'No valid email addresses found' }),
-    }
+  if (emails.length === 0) {
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'No valid emails provided' }) }
   }
 
   try {
-    const store = getStore('sj-interview-whitelist')
+    const whitelistStore = getBlobStore('sj-interview-whitelist')
+    const usedStore      = getBlobStore('sj-used-emails')
 
-    // Add each email (won't overwrite an already-used one)
-    let added = 0
-    let skipped = 0
+    let added = 0, skipped = 0
 
-    await Promise.all(
-      clean.map(async (email) => {
-        try {
-          const existing = await store.get(email)
-          if (existing) {
-            const record = JSON.parse(existing)
-            if (record.used) {
-              skipped++
-              return // Don't overwrite completed interviews
-            }
-          }
-          await store.set(
-            email,
-            JSON.stringify({
-              allowed: true,
-              used: false,
-              inProgress: false,
-              addedAt: new Date().toISOString(),
-            })
-          )
-          added++
-        } catch (err) {
-          console.error(`Failed to add ${email}:`, err)
+    await Promise.all(emails.map(async (email) => {
+      // Don't overwrite a completed interview
+      try {
+        const usedRaw = await usedStore.get(email)
+        if (usedRaw) {
+          const used = JSON.parse(usedRaw)
+          if (used.used) { skipped++; return }
         }
-      })
-    )
+      } catch {}
+
+      await whitelistStore.set(
+        email,
+        JSON.stringify({ allowed: true, addedAt: new Date().toISOString() })
+      )
+      added++
+    }))
 
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({
-        success: true,
-        added,
-        skipped,
-        total: clean.length,
-      }),
+      body: JSON.stringify({ success: true, added, skipped, total: emails.length }),
     }
   } catch (err) {
     console.error('add-emails error:', err)
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ error: 'Server error', detail: err.message }),
-    }
+    return { statusCode: 500, headers, body: JSON.stringify({ error: 'Failed to add emails', detail: err.message }) }
   }
 }
