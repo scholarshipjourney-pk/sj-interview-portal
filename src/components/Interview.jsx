@@ -638,7 +638,7 @@ export default function Interview({ email, onComplete }) {
       if (endingFiredRef.current) return
 
       setPhase('processing')
-      setStatusLabel('Transcribing your answer...')
+      setStatusLabel('Processing your response...')
 
       const audioMime = recordedMimeRef.current
       const audioBlob = new Blob(audioChunksRef.current, { type: audioMime })
@@ -677,11 +677,11 @@ export default function Interview({ email, onComplete }) {
           }
         } catch {
           if (attempt === 0) {
-            setStatusLabel('Transcription slow, retrying...')
+            setStatusLabel('Still processing, please wait...')
             setTimeout(() => transcribeAndSend(1), 2000)
           } else {
             setPhase('waiting')
-            setStatusLabel('Transcription error. Press mic to retry or type below.')
+            setStatusLabel('Could not process response. Press mic to try again or type below.')
           }
         }
       }
