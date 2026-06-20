@@ -88,7 +88,13 @@ export default function App() {
         <div className="app-bg"><FloatingDots /></div>
         <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
           <div className="glass-gold fade-in-up" style={{ textAlign: 'center', padding: '44px 40px', maxWidth: 480, width: '100%' }}>
-            <img src="/logo.png" alt="Scholarship Journey" style={{ height: 44, width: 'auto', objectFit: 'contain', marginBottom: 24 }} onError={e => e.target.style.display = 'none'} />
+            <img src="/logo.png" alt="Scholarship Journey" style={{ 
+  height: 44, 
+  width: 'auto', 
+  objectFit: 'contain', 
+  imageRendering: '-webkit-optimize-contrast', 
+  transform: 'translateZ(0)' 
+}} />
             <h2 style={{ marginBottom: 12 }}>💻 Laptop / PC Required</h2>
             <p className="text-secondary" style={{ fontSize: '0.95rem', lineHeight: 1.6 }}>
               Our AI interview platform requires a stable desktop environment, camera, and continuous microphone access to process your responses properly. 

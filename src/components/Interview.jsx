@@ -755,9 +755,18 @@ export default function Interview({ email, onComplete }) {
       {/* TOP BAR */}
       <div className="glass" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', marginBottom: 16, gap: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <img src="/logo.png" alt="Scholarship Journey"
-            style={{ height: 36, width: 'auto', objectFit: 'contain' }}
-            onError={e => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex' }} />
+          <img 
+  src="/logo.png" 
+  alt="Scholarship Journey" 
+  style={{ 
+    height: 36, 
+    width: 'auto', 
+    objectFit: 'contain', 
+    imageRendering: '-webkit-optimize-contrast', 
+    transform: 'translateZ(0)' 
+  }}
+  onError={e => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex' }} 
+/>
           <div className="sj-logo-icon" style={{ width: 34, height: 34, fontSize: '0.9rem', borderRadius: 8, display: 'none' }}>SJ</div>
           <div>
             <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>Sarfraz Ahmed</div>

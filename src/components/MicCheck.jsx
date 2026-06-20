@@ -107,9 +107,19 @@ export default function MicCheck({ onPass }) {
     <div className="page">
       <div className="glass-gold fade-in-up" style={{ width: '100%', maxWidth: 480, padding: '44px 40px', textAlign: 'center' }}>
 
-        <img src="/logo.png" alt="Scholarship Journey"
-          style={{ height: 44, width: 'auto', objectFit: 'contain', marginBottom: 24 }}
-          onError={e => { e.target.style.display = 'none' }} />
+        <img 
+  src="/logo.png" 
+  alt="Scholarship Journey"
+  style={{ 
+    height: 44, 
+    width: 'auto', 
+    objectFit: 'contain', 
+    marginBottom: 24,
+    imageRendering: '-webkit-optimize-contrast', 
+    transform: 'translateZ(0)' 
+  }}
+  onError={e => { e.target.style.display = 'none' }} 
+/>
 
         <h2 style={{ marginBottom: 8 }}>Microphone Check</h2>
         <p className="text-secondary" style={{ fontSize: '0.88rem', marginBottom: 32, lineHeight: 1.6 }}>
