@@ -205,9 +205,9 @@ If you are a student looking for international scholarship opportunities, check 
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 8, width: '100%' }}>
             {/* LinkedIn share */}
-            <button className="linkedin-btn" onClick={handleLinkedInShare} style={{ whiteSpace: 'nowrap', flex: '1 1 auto', justifyContent: 'center' }}>
+            <button className="linkedin-btn" onClick={handleLinkedInShare} style={{ flex: 1, padding: '12px 4px', fontSize: '0.85rem', justifyContent: 'center', whiteSpace: 'nowrap' }}>
               <LinkedInIcon />
               Share on LinkedIn
             </button>
@@ -216,15 +216,14 @@ If you are a student looking for international scholarship opportunities, check 
             <button
               onClick={handleWhatsApp}
               style={{
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                padding: '13px 22px',
+                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                padding: '12px 4px',
                 background: '#25D366', color: '#fff',
-                borderRadius: 100, fontWeight: 600, fontSize: '0.9rem',
+                borderRadius: 100, fontWeight: 600, fontSize: '0.85rem',
                 border: 'none', cursor: 'pointer', fontFamily: 'inherit',
                 boxShadow: '0 4px 16px rgba(37,211,102,0.3)',
                 transition: 'all 0.25s ease',
-                whiteSpace: 'nowrap',
-                flex: '1 1 auto'
+                whiteSpace: 'nowrap'
               }}
               onMouseEnter={e => { e.currentTarget.style.background = '#20b858'; e.currentTarget.style.transform = 'translateY(-1px)' }}
               onMouseLeave={e => { e.currentTarget.style.background = '#25D366'; e.currentTarget.style.transform = 'none' }}
@@ -239,7 +238,7 @@ If you are a student looking for international scholarship opportunities, check 
               target="_blank"
               rel="noopener noreferrer"
               className="linkedin-btn"
-              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, whiteSpace: 'nowrap', flex: '1 1 auto' }}
+              style={{ flex: 1, padding: '12px 4px', fontSize: '0.85rem', justifyContent: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}
             >
               <LinkedInIcon />
               Follow on LinkedIn
