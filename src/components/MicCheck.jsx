@@ -99,7 +99,7 @@ export default function MicCheck({ onPass }) {
     idle:       { icon: '🎙️', label: 'Click to test your microphone' },
     countdown:  { icon: '⏳', label: `Get ready... recording in ${countdown}` },
     recording:  { icon: '🔴', label: 'Recording for 5 seconds... speak now' },
-    playback:   { icon: '▶️', label: 'Click "Play Recording ▶️" to hear yourself' },
+    playback:   { icon: '🔊', label: 'Click "Play Recording" to hear yourself' },
     error:      { icon: '⚠️', label: errorMsg },
   }
 
@@ -117,35 +117,37 @@ export default function MicCheck({ onPass }) {
           You will record 5 seconds of audio and then play it back to confirm.
         </p>
 
-        {/* Status display */}
-        <div style={{
-          padding: '20px',
-          background: 'rgba(0,0,0,0.2)',
-          borderRadius: 14,
-          marginBottom: 28,
-          minHeight: 80,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 10,
-        }}>
-          <div style={{ fontSize: '2rem' }}>
-            {statusConfig[status]?.icon}
-          </div>
+        {/* Status display - Hidden during playback to remove redundancy */}
+        {status !== 'playback' && (
           <div style={{
-            fontSize: '0.88rem',
-            color: status === 'error' ? '#ff8080' : status === 'recording' ? '#ff6060' : 'var(--text-secondary)',
-            fontWeight: status === 'recording' ? 600 : 400,
+            padding: '20px',
+            background: 'rgba(0,0,0,0.2)',
+            borderRadius: 14,
+            marginBottom: 28,
+            minHeight: 80,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 10,
           }}>
-            {statusConfig[status]?.label}
-          </div>
-          {status === 'recording' && (
-            <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden', marginTop: 6 }}>
-              <div style={{ height: '100%', background: '#ff6060', borderRadius: 2, animation: 'timerBar 5s linear forwards' }} />
+            <div style={{ fontSize: '2rem' }}>
+              {statusConfig[status]?.icon}
             </div>
-          )}
-        </div>
+            <div style={{
+              fontSize: '0.88rem',
+              color: status === 'error' ? '#ff8080' : status === 'recording' ? '#ff6060' : 'var(--text-secondary)',
+              fontWeight: status === 'recording' ? 600 : 400,
+            }}>
+              {statusConfig[status]?.label}
+            </div>
+            {status === 'recording' && (
+              <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden', marginTop: 6 }}>
+                <div style={{ height: '100%', background: '#ff6060', borderRadius: 2, animation: 'timerBar 5s linear forwards' }} />
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Hidden audio player */}
         {audioURL && <audio ref={audioRef} src={audioURL} style={{ display: 'none' }} />}
@@ -162,7 +164,7 @@ export default function MicCheck({ onPass }) {
           {status === 'playback' && (
             <>
               <button className="btn btn-gold" style={{ width: '100%' }} onClick={playback}>
-                Play Recording ▶️
+                Play Recording
               </button>
               <button className="btn btn-ghost" style={{ width: '100%' }} onClick={startTest}>
                 Test Again
