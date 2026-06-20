@@ -2,9 +2,123 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 
 const TOTAL_SECONDS   = 20 * 60
 const WARNING_SECONDS = 3 * 60
-const MAX_RECORD_MS   = 3 * 60 * 1000  // 3-minute auto-stop safety limit
-const MAX_AUDIO_B64   = 10 * 1024 * 1024 // ~7.5 MB raw audio
+const MAX_RECORD_MS   = 3 * 60 * 1000
+const MAX_AUDIO_B64   = 10 * 1024 * 1024
 
+// =============================================
+// PLATFORM DETECTION
+// =============================================
+const ua = navigator.userAgent
+
+const IS_IOS     = /iPad|iPhone|iPod/.test(ua) && !window.MSStream
+const IS_MAC     = /Macintosh/.test(ua) && !IS_IOS
+const IS_ANDROID = /Android/.test(ua)
+const IS_WINDOWS = /Windows/.test(ua)
+const IS_LINUX   = /Linux/.test(ua) && !IS_ANDROID
+const IS_SAFARI  = /^((?!chrome|android).)*safari/i.test(ua)
+const IS_FIREFOX = /Firefox/.test(ua)
+const IS_MOBILE  = IS_IOS || IS_ANDROID
+
+// TTS on iOS Safari and Android Chrome both pause when screen dims or
+// tab loses focus. Keepalive needed on all mobile browsers.
+const NEEDS_KEEPALIVE = IS_MOBILE
+
+// Slower TTS rate on mobile for clarity, even slower on iOS Safari
+const TTS_RATE = IS_IOS ? 0.85 : IS_MOBILE ? 0.88 : 0.92
+
+// Delay between sentences to avoid the iOS restart glitch
+const SENTENCE_GAP_MS = IS_IOS ? 160 : IS_ANDROID ? 100 : 60
+
+// Delay before first utterance after synth.cancel()
+const TTS_START_DELAY_MS = IS_IOS ? 220 : IS_ANDROID ? 100 : 50
+
+// =============================================
+// AUDIO MIME TYPE (Safari records MP4, not WebM)
+// =============================================
+function getBestAudioMimeType() {
+  const types = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+    'audio/ogg',
+    'audio/mp4',   // Safari / iOS fallback
+  ]
+  if (typeof MediaRecorder === 'undefined') return ''
+  for (const type of types) {
+    try {
+      if (MediaRecorder.isTypeSupported(type)) return type
+    } catch {}
+  }
+  return ''
+}
+
+// =============================================
+// VOICE SELECTION - ALL PLATFORMS
+// =============================================
+function getBestMaleVoice() {
+  const voices = window.speechSynthesis.getVoices()
+  if (!voices || voices.length === 0) return null
+
+  const english = voices.filter(v => v.lang && v.lang.startsWith('en'))
+  if (english.length === 0) return null
+
+  // Known female voice name patterns across ALL platforms and browsers
+  const FEMALE = /zira|female|aria|jenny|sonia|libby|natasha|hazel|susan|karen|samantha|victoria|moira|tessa|fiona|cortana|eva|linda|heera|claire|allison|ava|kathy|princess|vicki|nora|ellen|serena|veena|sangeeta|emma|alice|grace|lisa|kate|sarah|emily|anna|martha|joanna|ivy|kendra|kimberly|salli|nicole|celine|chantal|amelie|audrey|maged|tamar/i
+
+  // Priority list covering all platforms in order of quality
+  const PRIORITY = [
+    // Windows 11 - Edge natural voices (best quality on Windows)
+    'Microsoft Guy Online (Natural)',
+    'Microsoft Roger Online (Natural)',
+    'Microsoft Christopher Online (Natural)',
+    'Microsoft Eric Online (Natural)',
+    'Microsoft Davis Online (Natural)',
+    'Microsoft Ryan Online (Natural)',
+    // Windows - Chrome and Firefox
+    'Google UK English Male',
+    'Microsoft David - English (United States)',
+    'Microsoft David Desktop - English (United States)',
+    'Microsoft Mark - English (United States)',
+    // macOS and iOS / iPadOS - Safari, Chrome, Firefox
+    'Daniel',     // UK male - available on all Apple devices
+    'Arthur',     // UK male - macOS Monterey+
+    'Rishi',      // Indian English male - Apple (sounds natural for SJ use case)
+    'Oliver',     // UK male - Apple
+    'Fred',       // older macOS male
+    'Junior',     // macOS
+    'Alex',       // older macOS, still present on many machines
+    // Android Chrome / Samsung Browser
+    'Google UK English Male',   // repeated explicitly for Android
+    'en-us-x-iol-local',        // Android offline male voice
+    'en-GB-x-gbd-local',        // Android offline UK male
+    'en-US-language',
+    // Linux - Chrome has Google voices, Firefox uses eSpeak
+    'Google UK English Male',
+    'English (Great Britain)',   // eSpeak on Linux (Firefox)
+    // Generic male keywords as last resort
+    'Male',
+    'en-US-Guy',
+    'en-GB-Male',
+    'Guy',
+  ]
+
+  // Try exact or substring match against priority list
+  for (const name of PRIORITY) {
+    const found = english.find(v => v.name.toLowerCase().includes(name.toLowerCase()))
+    if (found) return found
+  }
+
+  // Final fallback: any English voice that does not match female patterns
+  return (
+    english.find(v => !FEMALE.test(v.name) && v.localService) ||
+    english.find(v => !FEMALE.test(v.name)) ||
+    english[0]
+  )
+}
+
+// =============================================
+// HELPERS
+// =============================================
 function cleanText(text) {
   return (text || '')
     .replace(/\[TIME_WARNING\]/gi, '')
@@ -12,24 +126,6 @@ function cleanText(text) {
     .replace(/TIME_WARNING/g, '')
     .replace(/END_INTERVIEW/g, '')
     .trim()
-}
-
-function getMaleVoice() {
-  const voices = window.speechSynthesis.getVoices()
-  return (
-    voices.find(v => v.name === 'Google UK English Male') ||
-    voices.find(v => v.name.includes('Male') && v.lang.startsWith('en')) ||
-    voices.find(v => v.name.includes('David') && v.lang.startsWith('en')) ||
-    voices.find(v => v.name.includes('Daniel') && v.lang.startsWith('en')) ||
-    voices.find(v => v.name.includes('Alex') && v.lang.startsWith('en')) ||
-    voices.find(v => v.name === 'Google US English') ||
-    voices.find(v =>
-      v.lang === 'en-US' &&
-      v.localService &&
-      !v.name.toLowerCase().match(/zira|female|aria|jenny|sonia|libby|natasha|hazel|susan/)
-    ) ||
-    voices.find(v => v.lang.startsWith('en'))
-  )
 }
 
 const blobToBase64 = (blob) =>
@@ -40,20 +136,21 @@ const blobToBase64 = (blob) =>
     reader.readAsDataURL(blob)
   })
 
+// =============================================
+// UI COMPONENTS
+// =============================================
 function AiOrb({ phase }) {
   const pulse = phase === 'ai_speaking' || phase === 'listening'
   return (
     <div className="orb-wrapper">
       {pulse && <div className="orb-ring orb-ring-1 pulse" />}
       {pulse && <div className="orb-ring orb-ring-2 pulse" />}
-      <div
-        className={`orb ${
-          phase === 'ai_speaking' ? 'speaking'
-          : phase === 'listening'  ? 'listening'
-          : phase === 'processing' ? 'processing'
-          : 'idle'
-        }`}
-      />
+      <div className={`orb ${
+        phase === 'ai_speaking' ? 'speaking'
+        : phase === 'listening'  ? 'listening'
+        : phase === 'processing' ? 'processing'
+        : 'idle'
+      }`} />
     </div>
   )
 }
@@ -67,13 +164,21 @@ function Timer({ seconds }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 110 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
-        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', letterSpacing: '0.04em' }}>TIME LEFT</span>
-        <span style={{ fontFamily: 'monospace', fontSize: '1.15rem', fontWeight: 700, letterSpacing: '0.06em', color: danger ? '#ff6060' : warn ? 'var(--gold)' : 'var(--text-white)' }}>
+        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', letterSpacing: '0.04em' }}>
+          TIME LEFT
+        </span>
+        <span style={{
+          fontFamily: 'monospace', fontSize: '1.15rem', fontWeight: 700, letterSpacing: '0.06em',
+          color: danger ? '#ff6060' : warn ? 'var(--gold)' : 'var(--text-white)',
+        }}>
           {m}:{s}
         </span>
       </div>
       <div className="timer-bar-track">
-        <div className="timer-bar-fill" style={{ width: `${pct}%`, background: danger ? '#ff6060' : warn ? 'var(--gold)' : 'rgba(253,179,2,0.7)' }} />
+        <div className="timer-bar-fill" style={{
+          width: `${pct}%`,
+          background: danger ? '#ff6060' : warn ? 'var(--gold)' : 'rgba(253,179,2,0.7)',
+        }} />
       </div>
     </div>
   )
@@ -90,37 +195,44 @@ function ProgressDots({ current, total = 5 }) {
   )
 }
 
+// =============================================
+// MAIN COMPONENT
+// =============================================
 export default function Interview({ email, onComplete }) {
-  const [phase,          setPhase]          = useState('initializing')
-  const [messages,       setMessages]       = useState([])
-  const [currentAiText,  setCurrentAiText]  = useState('')
-  const [questionIndex,  setQuestionIndex]  = useState(0)
-  const [timeLeft,       setTimeLeft]       = useState(TOTAL_SECONDS)
-  const [showTextInput,  setShowTextInput]  = useState(false)
-  const [textDraft,      setTextDraft]      = useState('')
-  const [statusLabel,    setStatusLabel]    = useState('Connecting...')
+  const [phase,         setPhase]         = useState('initializing')
+  const [messages,      setMessages]      = useState([])
+  const [currentAiText, setCurrentAiText] = useState('')
+  const [questionIndex, setQuestionIndex] = useState(0)
+  const [timeLeft,      setTimeLeft]      = useState(TOTAL_SECONDS)
+  const [showTextInput, setShowTextInput] = useState(false)
+  const [textDraft,     setTextDraft]     = useState('')
+  const [statusLabel,   setStatusLabel]   = useState('Connecting...')
 
-  const messagesRef      = useRef([])
-  const phaseRef         = useRef('initializing')
-  const timeLeftRef      = useRef(TOTAL_SECONDS)
-  const warningFiredRef  = useRef(false)
-  const endingFiredRef   = useRef(false)
-  const disqualifiedRef  = useRef(false)
-  const closedEarlyRef   = useRef(false)
-  const videoRef         = useRef(null)
-  const timerRef         = useRef(null)
-  const questionIdxRef   = useRef(0)
-  const mediaRecorderRef = useRef(null)
-  const audioChunksRef   = useRef([])
-  const micStreamRef     = useRef(null)   // PRE-INITIALIZED mic stream for instant start
-  const recordTimerRef   = useRef(null)   // Auto-stop safety timer
+  const messagesRef        = useRef([])
+  const phaseRef           = useRef('initializing')
+  const timeLeftRef        = useRef(TOTAL_SECONDS)
+  const warningFiredRef    = useRef(false)
+  const endingFiredRef     = useRef(false)
+  const disqualifiedRef    = useRef(false)
+  const closedEarlyRef     = useRef(false)
+  const videoRef           = useRef(null)
+  const timerRef           = useRef(null)
+  const questionIdxRef     = useRef(0)
+  const mediaRecorderRef   = useRef(null)
+  const audioChunksRef     = useRef([])
+  const micStreamRef       = useRef(null)
+  const recordedMimeRef    = useRef('audio/webm')  // updated per-recording for Safari
+  const recordTimerRef     = useRef(null)
+  const keepAliveRef       = useRef(null)
+  const ttsActiveRef       = useRef(false)
+  const micBusyRef         = useRef(false)
 
-  useEffect(() => { messagesRef.current   = messages },       [messages])
-  useEffect(() => { phaseRef.current      = phase },          [phase])
-  useEffect(() => { timeLeftRef.current   = timeLeft },       [timeLeft])
-  useEffect(() => { questionIdxRef.current = questionIndex }, [questionIndex])
+  useEffect(() => { messagesRef.current    = messages },       [messages])
+  useEffect(() => { phaseRef.current       = phase },          [phase])
+  useEffect(() => { timeLeftRef.current    = timeLeft },       [timeLeft])
+  useEffect(() => { questionIdxRef.current = questionIndex },  [questionIndex])
 
-  // ---- Camera (video only, no audio) ----
+  // ---- Camera ----
   useEffect(() => {
     const init = async () => {
       try {
@@ -133,23 +245,18 @@ export default function Interview({ email, onComplete }) {
     }
     init()
     return () => {
-      if (videoRef.current?.srcObject) {
+      if (videoRef.current?.srcObject)
         videoRef.current.srcObject.getTracks().forEach(t => t.stop())
-      }
     }
   }, [])
 
-  // ---- PRE-INITIALIZE MIC for instant recording start ----
-  // This requests mic permission ONCE upfront so when the user clicks
-  // the mic button there is zero delay — the stream is already open.
+  // ---- Pre-initialize mic for instant start ----
   useEffect(() => {
     const initMic = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
         micStreamRef.current = stream
-      } catch {
-        // Mic unavailable — text fallback will be shown when user tries to record
-      }
+      } catch {}
     }
     initMic()
     return () => {
@@ -160,42 +267,67 @@ export default function Interview({ email, onComplete }) {
     }
   }, [])
 
-  // ---- Pre-load TTS voices ----
+  // ---- Pre-load voices (needed on Firefox and Android) ----
   useEffect(() => {
-    if (window.speechSynthesis.getVoices().length === 0) {
-      window.speechSynthesis.addEventListener('voiceschanged', () => {})
+    const synth = window.speechSynthesis
+    if (synth.getVoices().length === 0) {
+      const handler = () => {}
+      synth.addEventListener('voiceschanged', handler)
+      return () => synth.removeEventListener('voiceschanged', handler)
     }
   }, [])
 
+  // ---- TTS keepalive (mobile browsers pause TTS when screen dims) ----
+  const stopKeepAlive = useCallback(() => {
+    if (keepAliveRef.current) {
+      clearInterval(keepAliveRef.current)
+      keepAliveRef.current = null
+    }
+  }, [])
+
+  const startKeepAlive = useCallback(() => {
+    if (!NEEDS_KEEPALIVE) return
+    stopKeepAlive()
+    keepAliveRef.current = setInterval(() => {
+      const synth = window.speechSynthesis
+      if (synth && synth.speaking) {
+        synth.pause()
+        synth.resume()
+      }
+    }, 8000)
+  }, [stopKeepAlive])
+
   // =============================================
-  // COMPLETE INTERVIEW — kills all hardware
+  // KILL ALL HARDWARE AND REDIRECT
   // =============================================
   const completeInterviewNow = useCallback(async () => {
     setPhase('ended')
     setStatusLabel('Interview complete')
+    ttsActiveRef.current = false
+    stopKeepAlive()
     localStorage.setItem('sj_interview_completed_email', email)
 
-    // Stop video
-    if (videoRef.current?.srcObject) {
+    // Kill video
+    if (videoRef.current?.srcObject)
       videoRef.current.srcObject.getTracks().forEach(t => t.stop())
-    }
-    // Stop mic stream
+    // Kill mic
     if (micStreamRef.current) {
       micStreamRef.current.getTracks().forEach(t => t.stop())
       micStreamRef.current = null
     }
-    // Stop active recording
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop()
-    }
-    // Stop TTS
-    window.speechSynthesis?.cancel()
-    // Clear auto-stop timer
+    // Kill active recording
+    try {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive')
+        mediaRecorderRef.current.stop()
+    } catch {}
+    // Clear timers
     if (recordTimerRef.current) clearTimeout(recordTimerRef.current)
+    // Kill TTS
+    try { window.speechSynthesis?.cancel() } catch {}
 
     try {
       await fetch('/api/complete-interview', {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email,
@@ -207,80 +339,154 @@ export default function Interview({ email, onComplete }) {
     } catch {}
 
     setTimeout(() => onComplete(), 1500)
-  }, [email, onComplete])
+  }, [email, onComplete, stopKeepAlive])
 
   // =============================================
-  // TTS — sentence-chunked to avoid cutoffs
+  // TTS - sentence-chunked, cross-platform safe
   // =============================================
   const speakText = useCallback((text, onEndCallback = null) => {
     const synth = window.speechSynthesis
-    synth.cancel()
+    try { synth.cancel() } catch {}
+    stopKeepAlive()
+    ttsActiveRef.current = true
 
-    const sentences = text.match(/[^.!?]+[.!?]+|\s*[^.!?]+$/g) || [text]
-    let idx = 0
+    // Split into sentences. Each sentence is one utterance to avoid
+    // the 15-second cutoff bug present on iOS, Android, and some Linux setups.
+    const sentences = text
+      .match(/[^.!?]+[.!?]+|\s*[^.!?]+$/g)
+      ?.map(s => s.trim())
+      .filter(Boolean) || [text]
 
-    const playNext = () => {
-      if (idx >= sentences.length) {
-        if (onEndCallback) { onEndCallback(); return }
-        if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
+    let idx      = 0
+    let finished = false
+
+    const finish = () => {
+      if (finished) return
+      finished = true
+      ttsActiveRef.current = false
+      stopKeepAlive()
+      if (onEndCallback) { onEndCallback(); return }
+      if (phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
         setPhase('waiting')
         setStatusLabel('Your turn — press the mic or Spacebar to answer')
-        return
       }
+    }
 
-      const chunk = sentences[idx].trim()
+    const playNext = () => {
+      if (finished) return
+      if (!ttsActiveRef.current) { finish(); return }
+      if (idx >= sentences.length) { finish(); return }
+
+      const chunk = sentences[idx]
       if (!chunk) { idx++; playNext(); return }
 
       const utterance    = new SpeechSynthesisUtterance(chunk)
-      utterance.rate     = 0.92
+      utterance.rate     = TTS_RATE
       utterance.pitch    = 0.95
       utterance.volume   = 1.0
 
-      const voice = getMaleVoice()
+      // Voice selection runs fresh each sentence in case voices loaded late
+      const voice = getBestMaleVoice()
       if (voice) utterance.voice = voice
 
       if (idx === 0) {
         setPhase('ai_speaking')
         setStatusLabel('Sarfraz is speaking...')
+        startKeepAlive()
       }
 
-      utterance.onend   = () => { idx++; playNext() }
-      utterance.onerror = () => { idx++; playNext() }
-      synth.speak(utterance)
+      // Safety timer: if onend never fires (iOS/Android/Firefox bug),
+      // estimate duration and force-advance. Uses character count * 75ms
+      // as a rough speaking-time estimate.
+      const estMs = Math.max(2500, chunk.length * 75)
+      let advanced = false
+      const safetyTimer = setTimeout(() => {
+        if (!finished && !synth.speaking && !advanced) {
+          advanced = true
+          idx++
+          playNext()
+        }
+      }, estMs + 1500)
+
+      utterance.onend = () => {
+        clearTimeout(safetyTimer)
+        if (!advanced) {
+          advanced = true
+          setTimeout(() => { idx++; playNext() }, SENTENCE_GAP_MS)
+        }
+      }
+
+      utterance.onerror = (e) => {
+        clearTimeout(safetyTimer)
+        // 'interrupted' and 'canceled' are expected when we call cancel() — ignore them
+        if (e.error !== 'interrupted' && e.error !== 'canceled') {
+          console.warn(`TTS onerror sentence ${idx}:`, e.error)
+        }
+        if (!advanced) {
+          advanced = true
+          setTimeout(() => { idx++; playNext() }, SENTENCE_GAP_MS)
+        }
+      }
+
+      try {
+        synth.speak(utterance)
+      } catch (err) {
+        console.warn('synth.speak threw:', err)
+        clearTimeout(safetyTimer)
+        idx++
+        playNext()
+      }
     }
 
+    // On mobile, add a startup delay after cancel() so the audio pipeline
+    // fully clears before new speech begins. On desktop this is almost instant.
+    const startNow = () => setTimeout(playNext, TTS_START_DELAY_MS)
+
     if (synth.getVoices().length > 0) {
-      playNext()
+      startNow()
     } else {
-      synth.onvoiceschanged = playNext
-      setTimeout(() => { if (phaseRef.current !== 'ai_speaking') playNext() }, 500)
+      // Firefox and some Android builds fire voiceschanged late
+      const onReady = () => {
+        synth.removeEventListener('voiceschanged', onReady)
+        startNow()
+      }
+      synth.addEventListener('voiceschanged', onReady)
+      // Hard fallback after 1.5s in case voiceschanged never fires
+      setTimeout(() => {
+        if (!finished && phaseRef.current !== 'ai_speaking') {
+          synth.removeEventListener('voiceschanged', onReady)
+          startNow()
+        }
+      }, 1500)
     }
-  }, [])
+  }, [startKeepAlive, stopKeepAlive])
 
   // =============================================
   // GOODBYE + CLOSE
   // =============================================
   const triggerGoodbye = useCallback(async () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop()
-    }
-    window.speechSynthesis?.cancel()
+    if (endingFiredRef.current) return
+    try {
+      if (mediaRecorderRef.current?.state !== 'inactive')
+        mediaRecorderRef.current?.stop()
+    } catch {}
+    try { window.speechSynthesis?.cancel() } catch {}
+    ttsActiveRef.current = false
     setPhase('ending')
     setStatusLabel('Wrapping up...')
 
     const endMsg = {
-      role: 'user',
+      role:    'user',
       content: '[END_INTERVIEW] The interview is ending. Please give your warm, genuine closing remarks.',
     }
 
-    // Fallback goodbye in case API fails
-    let safeReply = "Thank you so much for taking the time to speak with me today. We really appreciate your interest in Scholarship Journey. Our team will review your responses carefully and will be in touch soon. Best of luck!"
+    let safeReply = "Thank you so much for taking the time to speak with me today. We really appreciate your interest in Scholarship Journey. Our team will review your responses carefully and will be in touch soon. Best of luck to you!"
 
     try {
       const res = await fetch('/api/chat', {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [...messagesRef.current, endMsg] }),
+        body:    JSON.stringify({ messages: [...messagesRef.current, endMsg] }),
       })
       if (res.ok) {
         const data = await res.json()
@@ -290,15 +496,14 @@ export default function Interview({ email, onComplete }) {
 
     setCurrentAiText(safeReply)
     speakText(safeReply, () => completeInterviewNow())
-  }, [completeInterviewNow, speakText])
+  }, [speakText, completeInterviewNow])
 
-  // ---- Tab hide = immediate end (with grace period) ----
+  // ---- Tab hide = end interview ----
   useEffect(() => {
     const checkGrace = () => {
       const spent = TOTAL_SECONDS - timeLeftRef.current
       return spent < 120 && questionIdxRef.current === 0
     }
-
     const onHide = () => {
       if (!document.hidden) return
       if (phaseRef.current === 'ended' || phaseRef.current === 'ending') return
@@ -311,7 +516,6 @@ export default function Interview({ email, onComplete }) {
         completeInterviewNow()
       }
     }
-
     const onUnload = () => {
       if (phaseRef.current === 'ended' || phaseRef.current === 'ending') return
       if (checkGrace()) return
@@ -320,7 +524,6 @@ export default function Interview({ email, onComplete }) {
         JSON.stringify({ email, disqualified: true, closedEarly: true, messages: messagesRef.current })
       )
     }
-
     document.addEventListener('visibilitychange', onHide)
     window.addEventListener('beforeunload', onUnload)
     return () => {
@@ -351,7 +554,10 @@ export default function Interview({ email, onComplete }) {
   // =============================================
   // CALL AI
   // =============================================
-  const callAI = useCallback(async (userContent, currentMessages) => {
+  const callAI = useCallback(async (userContent, currentMessages, retryCount = 0) => {
+    if (endingFiredRef.current) return
+    if (phaseRef.current === 'ending' || phaseRef.current === 'ended') return
+
     setPhase('processing')
     setStatusLabel('Sarfraz is thinking...')
 
@@ -367,17 +573,18 @@ export default function Interview({ email, onComplete }) {
 
     try {
       const res = await fetch('/api/chat', {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: updated }),
+        body:    JSON.stringify({ messages: updated }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
       const { reply }  = await res.json()
-      // FIX: guard against undefined reply before calling .includes
       const replyText  = reply || ''
       const isEnding   = replyText.includes('[END_INTERVIEW]')
       const safeReply  = cleanText(replyText)
+
+      if (!safeReply) throw new Error('Empty reply')
 
       const withReply = [...updated, { role: 'assistant', content: safeReply }]
       setMessages(withReply)
@@ -391,8 +598,13 @@ export default function Interview({ email, onComplete }) {
         speakText(safeReply)
       }
     } catch {
-      setStatusLabel('Connection issue. Press the mic to try again.')
-      setPhase('waiting')
+      if (retryCount === 0 && !endingFiredRef.current) {
+        setStatusLabel('Connection slow, retrying...')
+        setTimeout(() => callAI(userContent, currentMessages, 1), 2000)
+      } else {
+        setStatusLabel('Connection issue. Press mic to try again.')
+        setPhase('waiting')
+      }
     }
   }, [speakText, completeInterviewNow])
 
@@ -402,12 +614,16 @@ export default function Interview({ email, onComplete }) {
   }, [callAI])
 
   // =============================================
-  // MIC — uses PRE-INITIALIZED stream for instant start
+  // MIC - instant start, all platform audio formats
   // =============================================
   const startListening = useCallback(async () => {
-    // Use pre-initialized stream if available; otherwise request now (fallback)
-    let stream = micStreamRef.current
+    if (micBusyRef.current) return
+    if (phaseRef.current !== 'waiting') return
+    if (endingFiredRef.current) return
 
+    micBusyRef.current = true
+
+    let stream = micStreamRef.current
     if (!stream || stream.getTracks().some(t => t.readyState === 'ended')) {
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true })
@@ -415,67 +631,118 @@ export default function Interview({ email, onComplete }) {
       } catch {
         setShowTextInput(true)
         setStatusLabel('Mic blocked or unavailable. Type your answer below.')
+        micBusyRef.current = false
         return
       }
     }
 
-    const mediaRecorder    = new MediaRecorder(stream)
+    // Detect the best audio format the current browser supports
+    const mimeType = getBestAudioMimeType()
+    recordedMimeRef.current = mimeType || 'audio/webm'
+
+    let mediaRecorder
+    try {
+      mediaRecorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream)
+    } catch {
+      // Some browsers reject the mimeType option - fall back to no options
+      try {
+        mediaRecorder = new MediaRecorder(stream)
+        recordedMimeRef.current = 'audio/webm'
+      } catch {
+        setShowTextInput(true)
+        setStatusLabel('Recording not supported on this browser. Type your answer below.')
+        micBusyRef.current = false
+        return
+      }
+    }
+
     mediaRecorderRef.current = mediaRecorder
     audioChunksRef.current   = []
 
     mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data)
     }
 
     mediaRecorder.onstart = () => {
+      micBusyRef.current = false
       setPhase('listening')
-      setStatusLabel('Recording... Speak your answer, then click Stop.')
+      setStatusLabel('Recording... Speak your answer clearly, then click Stop.')
     }
 
     mediaRecorder.onstop = async () => {
-      if (recordTimerRef.current) {
-        clearTimeout(recordTimerRef.current)
-        recordTimerRef.current = null
-      }
+      if (recordTimerRef.current) { clearTimeout(recordTimerRef.current); recordTimerRef.current = null }
+      if (endingFiredRef.current) return
+
       setPhase('processing')
       setStatusLabel('Transcribing your answer...')
 
-      const audioBlob   = new Blob(audioChunksRef.current, { type: 'audio/webm' })
-      try {
-        const base64Audio = await blobToBase64(audioBlob)
+      const audioMime = recordedMimeRef.current
+      const audioBlob = new Blob(audioChunksRef.current, { type: audioMime })
 
-        // Guard: reject oversized audio
-        if (base64Audio.length > MAX_AUDIO_B64) {
-          setPhase('waiting')
-          setStatusLabel('Recording too long. Please keep answers under 3 minutes.')
-          return
-        }
-
-        const res  = await fetch('/api/transcribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ audio: base64Audio }),
-        })
-        if (!res.ok) throw new Error('Transcription failed')
-
-        const data = await res.json()
-        const text = (data.text || '').trim()
-
-        if (text) {
-          callAI(text, messagesRef.current)
-        } else {
-          setPhase('waiting')
-          setStatusLabel('No speech detected. Press the mic and try again.')
-        }
-      } catch {
+      if (audioBlob.size < 1000) {
         setPhase('waiting')
-        setStatusLabel('Transcription error. Press mic to retry or type below.')
+        setStatusLabel('Recording too short. Press mic and speak your answer.')
+        return
       }
+
+      const transcribeAndSend = async (attempt = 0) => {
+        try {
+          const base64Audio = await blobToBase64(audioBlob)
+
+          if (base64Audio.length > MAX_AUDIO_B64) {
+            setPhase('waiting')
+            setStatusLabel('Recording too long. Keep answers under 3 minutes.')
+            return
+          }
+
+          const res  = await fetch('/api/transcribe', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ audio: base64Audio, mimeType: audioMime }),
+          })
+          if (!res.ok) throw new Error('Transcription failed')
+
+          const data = await res.json()
+          const text = (data.text || '').trim()
+
+          if (text) {
+            callAI(text, messagesRef.current)
+          } else {
+            setPhase('waiting')
+            setStatusLabel('No speech detected. Press mic and try again.')
+          }
+        } catch {
+          if (attempt === 0) {
+            setStatusLabel('Transcription slow, retrying...')
+            setTimeout(() => transcribeAndSend(1), 2000)
+          } else {
+            setPhase('waiting')
+            setStatusLabel('Transcription error. Press mic to retry or type below.')
+          }
+        }
+      }
+
+      transcribeAndSend()
     }
 
-    mediaRecorder.start()
+    mediaRecorder.onerror = () => {
+      micBusyRef.current = false
+      setPhase('waiting')
+      setStatusLabel('Mic error. Press mic to try again.')
+    }
 
-    // Safety: auto-stop after MAX_RECORD_MS to avoid infinite recording
+    try {
+      mediaRecorder.start()
+    } catch {
+      micBusyRef.current = false
+      setShowTextInput(true)
+      setStatusLabel('Could not start recording. Type your answer below.')
+      return
+    }
+
+    // Auto-stop after 3 minutes as a safety net
     recordTimerRef.current = setTimeout(() => {
       if (mediaRecorderRef.current?.state === 'recording') {
         mediaRecorderRef.current.stop()
@@ -485,13 +752,11 @@ export default function Interview({ email, onComplete }) {
   }, [callAI])
 
   const stopListening = useCallback(() => {
-    if (recordTimerRef.current) {
-      clearTimeout(recordTimerRef.current)
-      recordTimerRef.current = null
-    }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop()
-    }
+    if (recordTimerRef.current) { clearTimeout(recordTimerRef.current); recordTimerRef.current = null }
+    try {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive')
+        mediaRecorderRef.current.stop()
+    } catch {}
   }, [])
 
   const handleTextSubmit = useCallback(() => {
@@ -533,7 +798,8 @@ export default function Interview({ email, onComplete }) {
       {/* TOP BAR */}
       <div className="glass" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', marginBottom: 16, gap: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <img src="/logo.png" alt="Scholarship Journey" style={{ height: 36, width: 'auto', objectFit: 'contain' }}
+          <img src="/logo.png" alt="Scholarship Journey"
+            style={{ height: 36, width: 'auto', objectFit: 'contain' }}
             onError={e => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex' }} />
           <div className="sj-logo-icon" style={{ width: 34, height: 34, fontSize: '0.9rem', borderRadius: 8, display: 'none' }}>SJ</div>
           <div>
@@ -545,14 +811,14 @@ export default function Interview({ email, onComplete }) {
         <Timer seconds={timeLeft} />
       </div>
 
-      {/* MAIN */}
+      {/* MAIN GRID */}
       <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16 }}>
 
-        {/* LEFT: AI panel */}
+        {/* LEFT */}
         <div className="glass-gold" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '28px 24px', gap: 20 }}>
           <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <ProgressDots current={questionIndex} total={5} />
-            <div style={{ fontSize: '0.78rem', color: timeDanger ? '#ff8080' : timeWarn ? 'var(--gold)' : 'var(--text-muted)', fontWeight: timeWarn ? 600 : 400 }}>
+            <div style={{ fontSize: '0.78rem', fontWeight: timeWarn ? 600 : 400, color: timeDanger ? '#ff8080' : timeWarn ? 'var(--gold)' : 'var(--text-muted)' }}>
               {timeDanger ? 'Wrapping up soon' : timeWarn ? 'Final question' : 'Interview in progress'}
             </div>
           </div>
@@ -566,14 +832,13 @@ export default function Interview({ email, onComplete }) {
                   <span style={{ fontSize: '0.9rem' }}>{statusLabel}</span>
                 </div>
               ) : (
-                <p style={{ fontSize: '1.05rem', lineHeight: 1.75, color: phase === 'ai_speaking' ? 'var(--text-white)' : 'var(--text-secondary)', transition: 'color 0.3s' }}>
+                <p style={{ fontSize: '1.05rem', lineHeight: 1.75, transition: 'color 0.3s', color: phase === 'ai_speaking' ? 'var(--text-white)' : 'var(--text-secondary)' }}>
                   {currentAiText}
                 </p>
               )}
             </div>
           </div>
 
-          {/* Status indicator */}
           <div style={{ width: '100%', padding: '10px 16px', background: 'rgba(0,0,0,0.2)', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{
               width: 8, height: 8, borderRadius: '50%', flexShrink: 0, transition: 'all 0.3s',
@@ -583,7 +848,6 @@ export default function Interview({ email, onComplete }) {
             <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>{statusLabel}</span>
           </div>
 
-          {/* Controls */}
           {!isEnding && (
             <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
               {showTextInput && (
@@ -595,17 +859,14 @@ export default function Interview({ email, onComplete }) {
                     onClick={handleTextSubmit} disabled={!textDraft.trim()}>Send</button>
                 </div>
               )}
-
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
                 <button
                   className={`mic-btn ${isListening ? 'recording' : ''}`}
                   onClick={isListening ? stopListening : startListening}
                   disabled={!canInteract && !isListening}
-                  title={isListening ? 'Click to stop recording' : 'Click to answer'}
                 >
                   {isListening ? '⏹' : '🎙️'}
                 </button>
-
                 <div style={{ textAlign: 'left' }}>
                   <div style={{ fontSize: '0.82rem', fontWeight: 600 }}>
                     {isListening ? 'Recording... click to stop' : canInteract ? 'Press mic to answer' : 'Please wait'}
@@ -614,7 +875,6 @@ export default function Interview({ email, onComplete }) {
                     {isListening ? 'Speak clearly, then click stop' : 'or press Spacebar'}
                   </div>
                 </div>
-
                 {!showTextInput && (
                   <button className="btn btn-ghost" style={{ padding: '8px 14px', fontSize: '0.78rem', marginLeft: 'auto' }}
                     onClick={() => { setShowTextInput(true); setStatusLabel('Type your answer below') }}
@@ -633,7 +893,7 @@ export default function Interview({ email, onComplete }) {
           )}
         </div>
 
-        {/* RIGHT: Camera + log */}
+        {/* RIGHT */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="glass" style={{ padding: 10, aspectRatio: '4/3', position: 'relative', overflow: 'hidden' }}>
             <video ref={videoRef} autoPlay muted playsInline className="candidate-video" style={{ borderRadius: 8 }} />
@@ -641,7 +901,6 @@ export default function Interview({ email, onComplete }) {
               <div className="status-dot" style={{ width: 5, height: 5 }} />YOU
             </div>
           </div>
-
           <div className="glass" style={{ flex: 1, padding: 16, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: 10 }}>
               Conversation Log
