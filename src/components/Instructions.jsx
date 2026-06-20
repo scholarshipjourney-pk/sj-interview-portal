@@ -193,7 +193,7 @@ export default function Instructions({ email, onStart }) {
 
             {/* Start button */}
             <button
-              className="btn btn-gold fade-in-up"
+              className={`btn fade-in-up ${bothGranted ? 'btn-gold' : 'btn-ghost'}`}
               style={{ width: '100%', padding: '16px', fontSize: '1rem', animationDelay: '0.18s' }}
               onClick={onStart}
               disabled={!bothGranted}

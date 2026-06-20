@@ -387,7 +387,7 @@ export default function Interview({ email, onComplete }) {
       
       if (phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
         setPhase('waiting')
-        setStatusLabel('Your turn — press the mic or Spacebar to answer')
+        setStatusLabel('Your turn, press the mic or Spacebar to answer')
       }
     }
 
@@ -399,7 +399,7 @@ export default function Interview({ email, onComplete }) {
       utteranceRef.current = null
       if (!onEndCallback && phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
         setPhase('waiting')
-        setStatusLabel('Your turn — press the mic or Spacebar to answer')
+        setStatusLabel('Your turn, press the mic or Spacebar to answer')
       }
     }
 
