@@ -6,7 +6,6 @@ import Interview from './components/Interview.jsx'
 import PostInterview from './components/PostInterview.jsx'
 import AdminPanel from './components/AdminPanel.jsx'
 
-// Background floating dots
 function FloatingDots() {
   const dots = Array.from({ length: 12 }, (_, i) => ({
     id: i,
@@ -44,13 +43,25 @@ const STAGES = {
   POST: 'post',
 }
 
+// Robust Mobile/Tablet Detector (Catches "Desktop Site" requests too)
+function isMobileOrTablet() {
+  const ua = navigator.userAgent;
+  const isMobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+  const isTouchScreen = ('maxTouchPoints' in navigator) && (navigator.maxTouchPoints > 0);
+  const isSmallScreen = window.innerWidth <= 1024;
+  return isMobileUA || (isTouchScreen && isSmallScreen);
+}
+
 export default function App() {
   const [stage, setStage] = useState(STAGES.EMAIL)
   const [candidateEmail, setCandidateEmail] = useState('')
   const [isAdmin, setIsAdmin] = useState(false)
+  const [isMobileDevice, setIsMobileDevice] = useState(false)
 
-  // Check for admin route
   useEffect(() => {
+    if (isMobileOrTablet()) {
+      setIsMobileDevice(true)
+    }
     const params = new URLSearchParams(window.location.search)
     if (params.get('admin') === 'true') {
       setIsAdmin(true)
@@ -63,11 +74,31 @@ export default function App() {
   }
 
   const handleInterviewStart = () => {
-  setStage(STAGES.MICCHECK)
-}
+    setStage(STAGES.MICCHECK)
+  }
 
   const handleInterviewEnd = () => {
     setStage(STAGES.POST)
+  }
+
+  // Block Mobile Users Early
+  if (isMobileDevice && !isAdmin) {
+    return (
+      <>
+        <div className="app-bg"><FloatingDots /></div>
+        <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div className="glass-gold fade-in-up" style={{ textAlign: 'center', padding: '44px 40px', maxWidth: 480, width: '100%' }}>
+            <img src="/logo.png" alt="Scholarship Journey" style={{ height: 44, width: 'auto', objectFit: 'contain', marginBottom: 24 }} onError={e => e.target.style.display = 'none'} />
+            <h2 style={{ marginBottom: 12 }}>💻 Laptop / PC Required</h2>
+            <p className="text-secondary" style={{ fontSize: '0.95rem', lineHeight: 1.6 }}>
+              Our AI interview platform requires a stable desktop environment, camera, and continuous microphone access to process your responses properly. 
+              <br /><br />
+              <strong>Please open this link on a Laptop or Desktop computer to proceed with your interview.</strong>
+            </p>
+          </div>
+        </div>
+      </>
+    )
   }
 
   return (
@@ -80,27 +111,11 @@ export default function App() {
         <AdminPanel />
       ) : (
         <>
-          {stage === STAGES.EMAIL && (
-            <EmailGate onVerified={handleEmailVerified} />
-          )}
-          {stage === STAGES.INSTRUCTIONS && (
-            <Instructions
-              email={candidateEmail}
-              onStart={handleInterviewStart}
-            />
-          )}
-          {stage === STAGES.MICCHECK && (
-  <MicCheck onPass={() => setStage(STAGES.INTERVIEW)} />
-)}
-          {stage === STAGES.INTERVIEW && (
-            <Interview
-              email={candidateEmail}
-              onComplete={handleInterviewEnd}
-            />
-          )}
-          {stage === STAGES.POST && (
-            <PostInterview email={candidateEmail} />
-          )}
+          {stage === STAGES.EMAIL && <EmailGate onVerified={handleEmailVerified} />}
+          {stage === STAGES.INSTRUCTIONS && <Instructions email={candidateEmail} onStart={handleInterviewStart} />}
+          {stage === STAGES.MICCHECK && <MicCheck onPass={() => setStage(STAGES.INTERVIEW)} />}
+          {stage === STAGES.INTERVIEW && <Interview email={candidateEmail} onComplete={handleInterviewEnd} />}
+          {stage === STAGES.POST && <PostInterview email={candidateEmail} />}
         </>
       )}
     </>

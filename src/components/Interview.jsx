@@ -241,6 +241,7 @@ export default function Interview({ email, onComplete }) {
   const keepAliveRef       = useRef(null)
   const ttsActiveRef       = useRef(false)
   const micBusyRef         = useRef(false)
+  const utteranceRef       = useRef(null) // Prevents Chrome TTS Garbage Collection bug
 
   useEffect(() => { messagesRef.current    = messages },       [messages])
   useEffect(() => { phaseRef.current       = phase },          [phase])
@@ -357,124 +358,62 @@ export default function Interview({ email, onComplete }) {
   }, [email, onComplete, stopKeepAlive])
 
   // =============================================
-  // TTS - sentence-chunked, cross-platform safe
+  // TTS - Desktop Optimized (Smooth, no sentence gaps)
   // =============================================
   const speakText = useCallback((text, onEndCallback = null) => {
     const synth = window.speechSynthesis
     try { synth.cancel() } catch {}
-    stopKeepAlive()
     ttsActiveRef.current = true
 
-    // Split into sentences. Each sentence is one utterance to avoid
-    // the 15-second cutoff bug present on iOS, Android, and some Linux setups.
-    const sentences = text
-      .match(/[^.!?]+[.!?]+|\s*[^.!?]+$/g)
-      ?.map(s => s.trim())
-      .filter(Boolean) || [text]
+    setPhase('ai_speaking')
+    setStatusLabel('Sarfraz is speaking...')
 
-    let idx      = 0
-    let finished = false
+    // Pass the entire text block at once to prevent buffering delays
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.rate  = 0.95 
+    utterance.pitch = 0.95
+    utterance.volume = 1.0
 
-    const finish = () => {
-      if (finished) return
-      finished = true
+    const voice = getBestMaleVoice()
+    if (voice) utterance.voice = voice
+
+    // Crucial: Store in a ref so Chrome's garbage collector doesn't delete it mid-sentence
+    utteranceRef.current = utterance
+
+    utterance.onend = () => {
       ttsActiveRef.current = false
-      stopKeepAlive()
+      utteranceRef.current = null
       if (onEndCallback) { onEndCallback(); return }
+      
       if (phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
         setPhase('waiting')
         setStatusLabel('Your turn — press the mic or Spacebar to answer')
       }
     }
 
-    const playNext = () => {
-      if (finished) return
-      if (!ttsActiveRef.current) { finish(); return }
-      if (idx >= sentences.length) { finish(); return }
-
-      const chunk = sentences[idx]
-      if (!chunk) { idx++; playNext(); return }
-
-      const utterance    = new SpeechSynthesisUtterance(chunk)
-      utterance.rate     = TTS_RATE
-      utterance.pitch    = 0.95
-      utterance.volume   = 1.0
-
-      // Voice selection runs fresh each sentence in case voices loaded late
-      const voice = getBestMaleVoice()
-      if (voice) utterance.voice = voice
-
-      if (idx === 0) {
-        setPhase('ai_speaking')
-        setStatusLabel('Sarfraz is speaking...')
-        startKeepAlive()
+    utterance.onerror = (e) => {
+      if (e.error !== 'interrupted' && e.error !== 'canceled') {
+        console.warn('TTS Error:', e.error)
       }
-
-      // Safety timer: if onend never fires (iOS/Android/Firefox bug),
-      // estimate duration and force-advance. Uses character count * 75ms
-      // as a rough speaking-time estimate.
-      const estMs = Math.max(2500, chunk.length * 75)
-      let advanced = false
-      const safetyTimer = setTimeout(() => {
-        if (!finished && !synth.speaking && !advanced) {
-          advanced = true
-          idx++
-          playNext()
-        }
-      }, estMs + 1500)
-
-      utterance.onend = () => {
-        clearTimeout(safetyTimer)
-        if (!advanced) {
-          advanced = true
-          setTimeout(() => { idx++; playNext() }, SENTENCE_GAP_MS)
-        }
+      ttsActiveRef.current = false
+      utteranceRef.current = null
+      if (!onEndCallback && phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
+        setPhase('waiting')
+        setStatusLabel('Your turn — press the mic or Spacebar to answer')
       }
+    }
 
-      utterance.onerror = (e) => {
-        clearTimeout(safetyTimer)
-        // 'interrupted' and 'canceled' are expected when we call cancel() — ignore them
-        if (e.error !== 'interrupted' && e.error !== 'canceled') {
-          console.warn(`TTS onerror sentence ${idx}:`, e.error)
-        }
-        if (!advanced) {
-          advanced = true
-          setTimeout(() => { idx++; playNext() }, SENTENCE_GAP_MS)
-        }
-      }
-
+    // Small delay ensures previous synth cancels fully before starting
+    setTimeout(() => {
       try {
         synth.speak(utterance)
       } catch (err) {
         console.warn('synth.speak threw:', err)
-        clearTimeout(safetyTimer)
-        idx++
-        playNext()
+        utterance.onend() // Force progression if it fails
       }
-    }
+    }, 50)
 
-    // On mobile, add a startup delay after cancel() so the audio pipeline
-    // fully clears before new speech begins. On desktop this is almost instant.
-    const startNow = () => setTimeout(playNext, TTS_START_DELAY_MS)
-
-    if (synth.getVoices().length > 0) {
-      startNow()
-    } else {
-      // Firefox and some Android builds fire voiceschanged late
-      const onReady = () => {
-        synth.removeEventListener('voiceschanged', onReady)
-        startNow()
-      }
-      synth.addEventListener('voiceschanged', onReady)
-      // Hard fallback after 1.5s in case voiceschanged never fires
-      setTimeout(() => {
-        if (!finished && phaseRef.current !== 'ai_speaking') {
-          synth.removeEventListener('voiceschanged', onReady)
-          startNow()
-        }
-      }, 1500)
-    }
-  }, [startKeepAlive, stopKeepAlive])
+  }, [])
 
   // =============================================
   // GOODBYE + CLOSE
