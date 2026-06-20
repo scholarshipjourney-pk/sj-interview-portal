@@ -143,7 +143,7 @@ export default function EmailGate({ onVerified }) {
       </div>
 
       <p className="text-muted" style={{ fontSize: '0.72rem', marginTop: 22, textAlign: 'center' }}>
-        &copy; {new Date().getFullYear()} Scholarship Journey · Powered by AI
+        &copy; {new Date().getFullYear()} Scholarship Journey
       </p>
     </div>
   )

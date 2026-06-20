@@ -56,16 +56,21 @@ export default function PostInterview({ email }) {
     setSubmitted(true)
   }
 
-  const handleLinkedInShare = async () => {
-    // Copy post text to clipboard
+  // New function just for copying the text
+  const handleCopyText = async () => {
     try {
       await navigator.clipboard.writeText(POST_TEXT)
-      setShareMsg('Post text copied! Opening LinkedIn... paste the text (Ctrl+V) to create your post.')
+      setShareMsg('Post text copied! You can now paste it into your LinkedIn post.')
+      setTimeout(() => setShareMsg(''), 4000)
     } catch {
-      setShareMsg('Opening LinkedIn. Copy the text above and paste it into your post.')
+      setShareMsg('Failed to copy. Please manually select and copy the text.')
     }
-    setTimeout(() => setShareMsg(''), 6000)
-    // Open LinkedIn feed in new tab
+  }
+
+  // Simplified LinkedIn share function
+  const handleLinkedInShare = () => {
+    setShareMsg('Opening LinkedIn... paste the copied text to create your post.')
+    setTimeout(() => setShareMsg(''), 5000)
     window.open('https://www.linkedin.com/feed/', '_blank', 'noopener,noreferrer')
   }
 
@@ -182,13 +187,29 @@ export default function PostInterview({ email }) {
             </div>
           </div>
 
-          {/* Post text preview */}
+          {/* Post text preview with absolute positioned copy button */}
           <div style={{
             background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.07)',
             borderRadius: 12, padding: '14px 16px',
             fontSize: '0.81rem', color: 'var(--text-secondary)', lineHeight: 1.7,
-            marginBottom: 16, whiteSpace: 'pre-line',
+            marginBottom: 16, whiteSpace: 'pre-line', position: 'relative'
           }}>
+            <button
+              onClick={handleCopyText}
+              style={{
+                position: 'absolute', top: 10, right: 10,
+                background: 'rgba(255,255,255,0.1)', border: 'none',
+                borderRadius: 6, padding: '6px 10px',
+                color: 'var(--text-white)', fontSize: '0.75rem', fontWeight: 600,
+                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5,
+                transition: 'background 0.2s'
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+            >
+              📋 Copy
+            </button>
+
             {`Just completed my AI-powered interview with Scholarship Journey and it was an incredible experience!
 
 The AI interviewer felt genuinely natural and conversational, honestly one of the most unique interview formats I have ever gone through.
