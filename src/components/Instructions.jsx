@@ -157,7 +157,7 @@ export default function Instructions({ email, onStart }) {
               )}
 
               {!bothGranted && (
-                <button className="btn btn-ghost" style={{ width: '100%' }} onClick={requestPermissions} disabled={requesting}>
+                <button className="btn btn-gold" style={{ width: '100%' }} onClick={requestPermissions} disabled={requesting}>
                   {requesting ? <><span className="spinner" /> Requesting...</> : 'Allow Camera and Microphone'}
                 </button>
               )}
