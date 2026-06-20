@@ -749,11 +749,6 @@ export default function Interview({ email, onComplete }) {
   const timeWarn    = timeLeft <= WARNING_SECONDS
   const timeDanger  = timeLeft <= 60
 
-  const displayMessages = messages
-    .filter(m => m.content !== 'START_INTERVIEW' && !m.content.includes('[END_INTERVIEW]'))
-    .map(m => ({ ...m, content: cleanText(m.content) }))
-    .filter(m => m.content.length > 0)
-
   return (
     <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', flexDirection: 'column', padding: 16 }}>
 
@@ -861,26 +856,6 @@ export default function Interview({ email, onComplete }) {
             <video ref={videoRef} autoPlay muted playsInline className="candidate-video" style={{ borderRadius: 8 }} />
             <div style={{ position: 'absolute', top: 14, left: 14, display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)', padding: '3px 10px', borderRadius: 20, fontSize: '0.7rem', fontWeight: 700, color: '#ff8080' }}>
               <div className="status-dot" style={{ width: 5, height: 5 }} />YOU
-            </div>
-          </div>
-          <div className="glass" style={{ flex: 1, padding: 16, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: 10 }}>
-              Conversation Log
-            </div>
-            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {displayMessages.map((m, i) => (
-                <div key={i} style={{
-                  padding: '8px 10px', borderRadius: 8, fontSize: '0.76rem', lineHeight: 1.55,
-                  background: m.role === 'assistant' ? 'rgba(253,179,2,0.08)' : 'rgba(255,255,255,0.04)',
-                  borderLeft: `2px solid ${m.role === 'assistant' ? 'var(--gold)' : 'rgba(255,255,255,0.15)'}`,
-                  color: m.role === 'assistant' ? 'var(--text-white)' : 'var(--text-secondary)',
-                }}>
-                  <div style={{ fontSize: '0.64rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: m.role === 'assistant' ? 'var(--gold)' : 'var(--text-muted)', marginBottom: 3 }}>
-                    {m.role === 'assistant' ? 'Sarfraz' : 'You'}
-                  </div>
-                  {m.content}
-                </div>
-              ))}
             </div>
           </div>
         </div>

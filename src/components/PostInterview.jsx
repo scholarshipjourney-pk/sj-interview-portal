@@ -205,9 +205,9 @@ If you are a student looking for international scholarship opportunities, check 
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 4 }}>
             {/* LinkedIn share */}
-            <button className="linkedin-btn" onClick={handleLinkedInShare}>
+            <button className="linkedin-btn" onClick={handleLinkedInShare} style={{ whiteSpace: 'nowrap', flex: '1 1 auto', justifyContent: 'center' }}>
               <LinkedInIcon />
               Share on LinkedIn
             </button>
@@ -216,13 +216,15 @@ If you are a student looking for international scholarship opportunities, check 
             <button
               onClick={handleWhatsApp}
               style={{
-                display: 'inline-flex', alignItems: 'center', gap: 10,
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 10,
                 padding: '13px 22px',
                 background: '#25D366', color: '#fff',
                 borderRadius: 100, fontWeight: 600, fontSize: '0.9rem',
                 border: 'none', cursor: 'pointer', fontFamily: 'inherit',
                 boxShadow: '0 4px 16px rgba(37,211,102,0.3)',
                 transition: 'all 0.25s ease',
+                whiteSpace: 'nowrap',
+                flex: '1 1 auto'
               }}
               onMouseEnter={e => { e.currentTarget.style.background = '#20b858'; e.currentTarget.style.transform = 'translateY(-1px)' }}
               onMouseLeave={e => { e.currentTarget.style.background = '#25D366'; e.currentTarget.style.transform = 'none' }}
@@ -236,8 +238,8 @@ If you are a student looking for international scholarship opportunities, check 
               href={LINKEDIN_PAGE}
               target="_blank"
               rel="noopener noreferrer"
-              className="btn btn-ghost"
-              style={{ fontSize: '0.87rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 8 }}
+              className="linkedin-btn"
+              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, whiteSpace: 'nowrap', flex: '1 1 auto' }}
             >
               <LinkedInIcon />
               Follow on LinkedIn
