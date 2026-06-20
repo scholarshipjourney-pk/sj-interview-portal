@@ -99,7 +99,7 @@ export default function MicCheck({ onPass }) {
     idle:       { icon: '🎙️', label: 'Click to test your microphone' },
     countdown:  { icon: '⏳', label: `Get ready... recording in ${countdown}` },
     recording:  { icon: '🔴', label: 'Recording for 5 seconds... speak now' },
-    playback:   { icon: '▶️', label: 'Click Play to hear yourself' },
+    playback:   { icon: '▶️', label: 'Click "Play Recording ▶️" to hear yourself' },
     error:      { icon: '⚠️', label: errorMsg },
   }
 
@@ -162,7 +162,7 @@ export default function MicCheck({ onPass }) {
           {status === 'playback' && (
             <>
               <button className="btn btn-gold" style={{ width: '100%' }} onClick={playback}>
-                Play Back Recording
+                Play Recording ▶️
               </button>
               <button className="btn btn-ghost" style={{ width: '100%' }} onClick={startTest}>
                 Test Again
