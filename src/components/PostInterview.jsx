@@ -205,7 +205,7 @@ If you are a student looking for international scholarship opportunities, check 
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 4 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             {/* LinkedIn share */}
             <button className="linkedin-btn" onClick={handleLinkedInShare} style={{ whiteSpace: 'nowrap', flex: '1 1 auto', justifyContent: 'center' }}>
               <LinkedInIcon />
