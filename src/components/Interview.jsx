@@ -283,9 +283,17 @@ export default function Interview({ email, onComplete }) {
     }
   }, [])
 
-  // ---- Pre-load voices (needed on Firefox and Android) ----
+  // ---- Pre-load voices & Unlock Browser Audio ----
   useEffect(() => {
     const synth = window.speechSynthesis
+    
+    // THE FIX: Play a completely silent utterance instantly to unlock the browser's autoplay policy
+    try {
+      const unlock = new SpeechSynthesisUtterance('')
+      unlock.volume = 0
+      synth.speak(unlock)
+    } catch {}
+
     if (synth.getVoices().length === 0) {
       const handler = () => {}
       synth.addEventListener('voiceschanged', handler)
