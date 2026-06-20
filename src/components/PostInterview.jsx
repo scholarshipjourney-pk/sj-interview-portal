@@ -187,17 +187,18 @@ export default function PostInterview({ email }) {
             </div>
           </div>
 
-          {/* Post text preview with absolute positioned copy button */}
+          {/* Post text preview */}
           <div style={{
             background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.07)',
-            borderRadius: 12, padding: '14px 16px',
+            borderRadius: 12, 
+            padding: '14px 16px 46px 16px', /* Added extra bottom padding to make room */
             fontSize: '0.81rem', color: 'var(--text-secondary)', lineHeight: 1.7,
             marginBottom: 16, whiteSpace: 'pre-line', position: 'relative'
           }}>
             <button
               onClick={handleCopyText}
               style={{
-                position: 'absolute', top: 10, right: 10,
+                position: 'absolute', bottom: 12, right: 12, /* Moved to bottom right */
                 background: 'rgba(255,255,255,0.1)', border: 'none',
                 borderRadius: 6, padding: '6px 10px',
                 color: 'var(--text-white)', fontSize: '0.75rem', fontWeight: 600,
