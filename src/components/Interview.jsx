@@ -128,6 +128,21 @@ function cleanText(text) {
     .trim()
 }
 
+function makePronounceable(text) {
+  return text
+    .replace(/\bLLMs?\b/g, 'L L M')
+    .replace(/\bAPIs?\b/g, 'A P I')
+    .replace(/\bML\b/g, 'M L')
+    .replace(/\bNLP\b/g, 'N L P')
+    .replace(/\bYOLOv(\d+)\b/gi, 'YOLO version $1')
+    .replace(/\bRAG\b/g, 'Rag')
+    .replace(/\bCNN\b/g, 'C N N')
+    .replace(/\bGPU\b/g, 'G P U')
+    .replace(/\bCPU\b/g, 'C P U')
+    .replace(/\bSarfraz\b/g, 'Sarr-fraz')
+    .replace(/\bAhmed\b/g, 'Ah-med')
+}
+
 const blobToBase64 = (blob) =>
   new Promise((resolve, reject) => {
     const reader = new FileReader()

@@ -1,3 +1,4 @@
+import MicCheck from './components/MicCheck.jsx'
 import { useState, useEffect } from 'react'
 import EmailGate from './components/EmailGate.jsx'
 import Instructions from './components/Instructions.jsx'
@@ -38,6 +39,7 @@ function FloatingDots() {
 const STAGES = {
   EMAIL: 'email',
   INSTRUCTIONS: 'instructions',
+  MICCHECK: 'miccheck',
   INTERVIEW: 'interview',
   POST: 'post',
 }
@@ -61,8 +63,8 @@ export default function App() {
   }
 
   const handleInterviewStart = () => {
-    setStage(STAGES.INTERVIEW)
-  }
+  setStage(STAGES.MICCHECK)
+}
 
   const handleInterviewEnd = () => {
     setStage(STAGES.POST)
@@ -87,6 +89,9 @@ export default function App() {
               onStart={handleInterviewStart}
             />
           )}
+          {stage === STAGES.MICCHECK && (
+  <MicCheck onPass={() => setStage(STAGES.INTERVIEW)} />
+)}
           {stage === STAGES.INTERVIEW && (
             <Interview
               email={candidateEmail}
