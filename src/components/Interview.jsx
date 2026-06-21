@@ -420,6 +420,7 @@ export default function Interview({ email, onComplete }) {
     setStatusLabel('Interview complete')
     ttsActiveRef.current = false
     stopKeepAlive()
+    setFullscreenWarning(false)
     localStorage.setItem('sj_interview_completed_email', email)
 
     // Kill video
@@ -1105,7 +1106,10 @@ export default function Interview({ email, onComplete }) {
           )}
 
           {isEnding && (
-            <div className="alert alert-success" style={{ width: '100%', textAlign: 'center' }}>
+            <div 
+              className={`alert ${statusLabel === 'Saving your interview recording...' ? 'alert-error' : 'alert-success'}`} 
+              style={{ width: '100%', textAlign: 'center' }}
+            >
               {statusLabel === 'Saving your interview recording...' 
                 ? <><span className="spinner" style={{marginRight: 8}}/> Saving video... Please DO NOT close this tab.</>
                 : 'Interview complete. Redirecting...'}
