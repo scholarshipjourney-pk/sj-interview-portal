@@ -15,7 +15,7 @@ function TranscriptModal({ data, onClose }) {
   if (!data) return null
   const msgs = data.transcript?.messages || []
   
-// Safely grab the candidate rating and feedback from our new transcript fields (or fallback to old review object)
+  // Safely grab the candidate rating and feedback from our new transcript fields (or fallback to old review object)
   const candidateRating = data.candidateRating || data.review?.rating;
   const candidateFeedback = data.candidateFeedback || data.review?.review;
 
@@ -44,6 +44,7 @@ function TranscriptModal({ data, onClose }) {
               { label: 'Disqualified', val: data.status.disqualified ? 'Yes' : 'No' },
               { label: 'Closed early', val: data.status.closedEarly ? 'Yes' : 'No' },
               { label: 'Candidate Rating', val: candidateRating ? `${candidateRating}/5` : 'None' },
+              { label: 'AI Score', val: data.transcript?.aiRating ? `${data.transcript.aiRating}/10` : 'N/A' },
               { label: 'Video', val: data.transcript?.videoUrl ? <a href={data.transcript.videoUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--gold)' }}>Watch Recording</a> : 'Not saved' },
             ].map(item => (
               <div key={item.label} style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 12px', borderRadius: 8 }}>
@@ -66,6 +67,23 @@ function TranscriptModal({ data, onClose }) {
             {candidateFeedback && (
               <div>
                 <strong style={{ color: 'var(--text-white)' }}>Comment:</strong> "{candidateFeedback}"
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* NEW: AI EVALUATION SECTION */}
+        {(data.transcript?.aiRating || data.transcript?.aiFeedback) && (
+          <div style={{ background: 'rgba(80, 220, 120, 0.08)', border: '1px solid rgba(80, 220, 120, 0.2)', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            <div style={{ fontSize: '0.68rem', color: '#80e8a0', fontWeight: 700, marginBottom: 6 }}>AI INTERVIEWER'S ASSESSMENT</div>
+            {data.transcript?.aiRating && (
+              <div style={{ marginBottom: data.transcript?.aiFeedback ? 4 : 0 }}>
+                <strong style={{ color: 'var(--text-white)' }}>Technical Score:</strong> {data.transcript.aiRating} / 10
+              </div>
+            )}
+            {data.transcript?.aiFeedback && (
+              <div>
+                <strong style={{ color: 'var(--text-white)' }}>Recruiter Notes:</strong> "{data.transcript.aiFeedback}"
               </div>
             )}
           </div>
