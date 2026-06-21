@@ -468,7 +468,7 @@ export default function Interview({ email, onComplete }) {
     setStatusLabel('Saving your interview recording...')
     try {
       const uploadTimeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 60000)
+        setTimeout(() => reject(new Error('timeout')), 180000)
       )
       videoUrl = await Promise.race([uploadVideo(), uploadTimeout])
     } catch {
@@ -1106,7 +1106,9 @@ export default function Interview({ email, onComplete }) {
 
           {isEnding && (
             <div className="alert alert-success" style={{ width: '100%', textAlign: 'center' }}>
-              Interview complete. Redirecting...
+              {statusLabel === 'Saving your interview recording...' 
+                ? <><span className="spinner" style={{marginRight: 8}}/> Saving video... Please DO NOT close this tab.</>
+                : 'Interview complete. Redirecting...'}
             </div>
           )}
         </div>
