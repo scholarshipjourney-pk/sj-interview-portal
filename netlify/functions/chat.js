@@ -1,10 +1,15 @@
 // netlify/functions/chat.js
-// Powered by Google Gemini 2.5 Flash - Free Tier (1,000,000 TPM limit)
+// Bulletproof 6-Key Auto-Rotation System with 7-Second Timeouts & Fallbacks
 
-const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
+
+const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct';
+
 const MAX_TOKENS = 280;
+const FETCH_TIMEOUT_MS = 7000; // Updated to 7 seconds based on Claude's advice
 
-// Your exact SYSTEM_PROMPT preserved to protect your custom interview flow
 const SYSTEM_PROMPT = `You are Sarfraz Ahmed. You are conducting a 20-minute AI and ML Internship screening interview.
 
 ABOUT YOURSELF (only share details if the candidate specifically asks about you or the company):
@@ -30,41 +35,93 @@ INTERVIEW STRUCTURE:
 - Ask 4 to 5 technical questions total chosen from the question bank below. Pick DIFFERENT questions each time.
 - When a candidate mentions a specific project or tool, ask 1 to 2 natural follow-up questions before moving on.
 
-QUESTION BANK — choose 4 to 5 from different groups each time:
-Group A — ML Fundamentals:
+QUESTION BANK (choose 4 to 5 from different groups each time):
+Group A - ML Fundamentals:
 - How do you typically approach training an ML model from scratch? Walk me through your process.
 - When evaluating a model, what metrics do you look at and why?
 - What's your experience with handling overfitting?
 
-Group B — Python and Data Science:
+Group B - Python and Data Science:
 - Which Python libraries do you rely on most for data science work?
 - Tell me about a time you had to clean or prepare a messy dataset.
 
-Group D — LLMs and AI Tools:
+Group D - LLMs and AI Tools:
 - Have you worked with large language models or built anything on top of LLM APIs?
 - Tell me about a project where you used prompt engineering to get better results.
 - What is your understanding of RAG?
 
 STARTING THE INTERVIEW:
-When you receive START_INTERVIEW, say one short sentence introducing yourself as Sarfraz Ahmed who will be conducting today's interview. Do not mention the company. Do not say you are from Scholarship Journey. Immediately ask your first technical question in the same breath. Keep the intro to one sentence maximum.
+When you receive START_INTERVIEW, say one short sentence introducing yourself as Sarfraz Ahmed who will be conducting today's interview. Immediately ask your first technical question in the same breath. Keep the intro to one sentence maximum.
 
 WHEN YOU SEE [TIME_WARNING]:
 Wrap up the current thread naturally and ask one final brief question. Do NOT write the words TIME_WARNING in your response.`;
 
-export const handler = async (event) => {
+async function fetchAI(endpoint, apiKey, model, messages, isOpenRouter = false) {
   const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Authorization': `Bearer ${apiKey}`,
     'Content-Type': 'application/json',
   };
 
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers, body: '' };
+  if (isOpenRouter) {
+    headers['HTTP-Referer'] = 'https://scholarshipjourney.pk/';
+    headers['X-Title'] = 'Scholarship Journey Interviewer';
   }
 
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) };
+  const payload = {
+    model: model,
+    messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages],
+    max_tokens: MAX_TOKENS,
+    temperature: 0.3,
+    top_p: 0.9,
+  };
+
+  if (isOpenRouter) {
+    payload.provider = { sort: "throughput" };
   }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    
+    clearTimeout(timeoutId);
+
+    if (response.status === 429) {
+      throw new Error('RATE_LIMIT_EXCEEDED');
+    }
+    
+    if (response.status >= 500) {
+      throw new Error('SERVER_ERROR');
+    }
+
+    if (!response.ok) {
+      throw new Error('CRITICAL_API_ERROR');
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content?.trim();
+    
+  } catch (error) {
+    clearTimeout(timeoutId);
+    throw error;
+  }
+}
+
+export const handler = async (event) => {
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, HTTP-Referer, X-Title',
+    'Content-Type': 'application/json',
+  };
+
+  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
+  if (event.httpMethod !== 'POST') return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) };
 
   let messages;
   try {
@@ -75,67 +132,59 @@ export const handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid request body' }) };
   }
 
-  // Keeping your existing environment variable name intact as requested
-  const apiKey = process.env.GROQ_API_KEY; 
-  if (!apiKey) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: 'API Key not configured' }) };
+  const groqKeys = [
+    process.env.GROQ_KEY_1,
+    process.env.GROQ_KEY_2,
+    process.env.GROQ_KEY_3,
+    process.env.GROQ_KEY_4,
+    process.env.GROQ_KEY_5
+  ].filter(Boolean);
+
+  const openRouterKey = process.env.OPENROUTER_KEY;
+
+  if (groqKeys.length === 0 && !openRouterKey) {
+    return { statusCode: 500, headers, body: JSON.stringify({ error: 'No API keys configured in Netlify' }) };
   }
 
-  try {
-    // Convert the frontend standard chat history format to Gemini's expected contents structure
-    const geminiContents = messages.map(msg => ({
-      role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: msg.content }]
-    }));
+  let finalReply = null;
 
-    const response = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: geminiContents,
-        systemInstruction: {
-          parts: [{ text: SYSTEM_PROMPT }]
-        },
-        generationConfig: {
-          maxOutputTokens: MAX_TOKENS,
-          temperature: 0.3,
-          topP: 0.9,
-        }
-      }),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('Gemini API error:', response.status, errText);
-      throw new Error(`Gemini responded with ${response.status}`);
+  for (let i = 0; i < groqKeys.length; i++) {
+    try {
+      finalReply = await fetchAI(GROQ_ENDPOINT, groqKeys[i], GROQ_MODEL, messages, false);
+      if (finalReply) {
+        console.log(`Success using GROQ_KEY_${i + 1}`);
+        break; 
+      }
+    } catch (error) {
+      console.log(`GROQ_KEY_${i + 1} skipped due to: ${error.message || error.name}`);
+      if (error.message === 'CRITICAL_API_ERROR') {
+        continue;
+      }
     }
+  }
 
-    const data = await response.json();
-    let reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+  if (!finalReply && openRouterKey) {
+    try {
+      finalReply = await fetchAI(OPENROUTER_ENDPOINT, openRouterKey, OPENROUTER_MODEL, messages, true);
+      console.log('Success using OPENROUTER_KEY fallback');
+    } catch (error) {
+      console.error(`OpenRouter ultimate fallback failed: ${error.message || error.name}`);
+    }
+  }
 
-    if (!reply) throw new Error('Empty response from Gemini');
-
-    // Strip internal formatting if accidentally leaked
-    reply = reply
-      .replace(/\[TIME_WARNING\]/gi, '')
-      .replace(/TIME_WARNING/g, '')
-      .trim();
-
+  if (finalReply) {
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ reply }),
+      body: JSON.stringify({ reply: finalReply.replace(/\[TIME_WARNING\]/gi, '').trim() }),
     };
-  } catch (err) {
-    console.error('Chat function error:', err);
+  } else {
     return {
       statusCode: 500,
       headers,
       body: JSON.stringify({
-        error: 'AI service error',
-        reply: "I ran into a brief connection issue. Could you give me just a second and try again?",
+        error: 'All AI services exhausted',
+        reply: "I'm experiencing a brief network interruption. Could you please give me just one second and repeat that?",
       }),
     };
   }
