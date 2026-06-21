@@ -39,6 +39,7 @@ function TranscriptModal({ data, onClose }) {
               { label: 'Disqualified', val: data.status.disqualified ? 'Yes' : 'No' },
               { label: 'Closed early', val: data.status.closedEarly ? 'Yes' : 'No' },
               { label: 'Rating', val: data.review?.rating ? `${data.review.rating}/5` : 'None' },
+              { label: 'Video', val: data.transcript?.videoUrl ? <a href={data.transcript.videoUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--gold)' }}>Watch Recording</a> : 'Not saved' },
             ].map(item => (
               <div key={item.label} style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 12px', borderRadius: 8 }}>
                 <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginBottom: 2 }}>{item.label}</div>

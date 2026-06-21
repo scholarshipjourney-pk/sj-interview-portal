@@ -22,13 +22,14 @@ export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' }
   if (event.httpMethod !== 'POST')   return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) }
 
-  let email, disqualified, closedEarly, messages
+  let email, disqualified, closedEarly, messages, videoUrl
   try {
     const body   = JSON.parse(event.body || '{}')
     email        = (body.email || '').trim().toLowerCase()
     disqualified = Boolean(body.disqualified)
     closedEarly  = Boolean(body.closedEarly)
     messages     = body.messages || []
+    videoUrl     = body.videoUrl || null
   } catch {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Bad request' }) }
   }
@@ -68,7 +69,7 @@ export const handler = async (event) => {
     const transcriptStore = getBlobStore('sj-interview-transcripts')
     await transcriptStore.set(
       email,
-      JSON.stringify({ email, completedAt: now, disqualified, closedEarly, messages: cleanMessages })
+      JSON.stringify({ email, completedAt: now, disqualified, closedEarly, messages: cleanMessages, videoUrl })
     )
 
     return { statusCode: 200, headers, body: JSON.stringify({ success: true }) }

@@ -37,6 +37,12 @@ const RULES = [
     title: 'One Attempt Only',
     desc: 'This is your single opportunity. Once the interview begins it cannot be restarted. Make sure your internet connection is stable before proceeding.',
   },
+  {
+    icon: '📹',
+    bg: 'rgba(253,179,2,0.1)',
+    title: 'Interview Recording Notice',
+    desc: 'This interview session may be recorded for evaluation and quality assurance purposes by the Scholarship Journey hiring team.',
+  },
 ]
 
 export default function Instructions({ email, onStart }) {

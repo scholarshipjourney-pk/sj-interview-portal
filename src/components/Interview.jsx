@@ -52,6 +52,20 @@ function getBestAudioMimeType() {
   return ''
 }
 
+function getBestVideoMimeType() {
+  const types = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+    'video/mp4',
+  ]
+  if (typeof MediaRecorder === 'undefined') return 'video/webm'
+  for (const t of types) {
+    try { if (MediaRecorder.isTypeSupported(t)) return t } catch {}
+  }
+  return 'video/webm'
+}
+
 // =============================================
 // VOICE SELECTION - ALL PLATFORMS
 // =============================================
@@ -220,6 +234,9 @@ export default function Interview({ email, onComplete }) {
   const [questionIndex, setQuestionIndex] = useState(0)
   const [timeLeft,      setTimeLeft]      = useState(TOTAL_SECONDS)
   const [statusLabel,   setStatusLabel]   = useState('Connecting...')
+  const [needsFullscreen,   setNeedsFullscreen]   = useState(!IS_IOS)
+  const [fullscreenWarning, setFullscreenWarning] = useState(false)
+  const [fsCountdown,       setFsCountdown]       = useState(10)
 
   const messagesRef        = useRef([])
   const phaseRef           = useRef('initializing')
@@ -240,6 +257,11 @@ export default function Interview({ email, onComplete }) {
   const ttsActiveRef       = useRef(false)
   const micBusyRef         = useRef(false)
   const utteranceRef       = useRef(null) // Prevents Chrome TTS Garbage Collection bug
+  const videoRecorderRef        = useRef(null)
+  const videoChunksRef          = useRef([])
+  const videoMimeRef            = useRef('video/webm')
+  const fullscreenViolationsRef = useRef(0)
+  const fullscreenTimerRef      = useRef(null)
 
   useEffect(() => { messagesRef.current    = messages },       [messages])
   useEffect(() => { phaseRef.current       = phase },          [phase])
@@ -255,12 +277,32 @@ export default function Interview({ email, onComplete }) {
           audio: false,
         })
         if (videoRef.current) videoRef.current.srcObject = stream
+        // Start silent background video recording
+        try {
+          const vMime = getBestVideoMimeType()
+          videoMimeRef.current = vMime
+          const vRecorder = new MediaRecorder(stream, {
+            mimeType:           vMime,
+            videoBitsPerSecond: 250000, // low bitrate keeps 20-min file around 35-40 MB
+          })
+          videoChunksRef.current          = []
+          vRecorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) videoChunksRef.current.push(e.data)
+          }
+          vRecorder.start(5000) // flush data to chunks every 5 seconds
+          videoRecorderRef.current = vRecorder
+        } catch (err) {
+          console.warn('Video recording unavailable on this browser:', err)
+        }
       } catch {}
     }
     init()
     return () => {
       if (videoRef.current?.srcObject)
         videoRef.current.srcObject.getTracks().forEach(t => t.stop())
+      if (videoRecorderRef.current && videoRecorderRef.current.state !== 'inactive') {
+        try { videoRecorderRef.current.stop() } catch {}
+      }
     }
   }, [])
 
@@ -319,6 +361,57 @@ export default function Interview({ email, onComplete }) {
     }, 8000)
   }, [stopKeepAlive])
 
+  // Requests browser fullscreen - must be called from a user click event
+  const enterFullscreen = useCallback(() => {
+    const el = document.documentElement
+    try {
+      if (el.requestFullscreen)            el.requestFullscreen()
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen()
+      else if (el.mozRequestFullScreen)    el.mozRequestFullScreen()
+    } catch {}
+  }, [])
+
+  // Uploads recorded video chunks directly to Cloudinary from the browser
+  const uploadVideo = useCallback(async () => {
+    if (!videoChunksRef.current || videoChunksRef.current.length === 0) return null
+    try {
+      const videoBlob = new Blob(videoChunksRef.current, { type: videoMimeRef.current })
+      if (videoBlob.size < 10000) return null // too small, recording probably failed
+
+      // Get a signed upload URL from our server (keeps API secret safe)
+      const sigRes = await fetch('/api/get-upload-signature', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ email }),
+      })
+      if (!sigRes.ok) throw new Error('Could not get upload signature')
+      
+      const { signature, timestamp, apiKey, cloudName, publicId, folder } = await sigRes.json()
+      
+      // Upload directly from browser to Cloudinary - no size limit this way
+      const formData = new FormData()
+      const ext      = videoMimeRef.current.includes('mp4') ? 'mp4' : 'webm'
+      formData.append('file',       videoBlob, `${publicId}.${ext}`)
+      formData.append('signature',  signature)
+      formData.append('timestamp',  String(timestamp))
+      formData.append('api_key',    apiKey)
+      formData.append('folder',     folder)
+      formData.append('public_id',  publicId)
+      
+      const uploadRes = await fetch(
+        `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`,
+        { method: 'POST', body: formData }
+      )
+      if (!uploadRes.ok) throw new Error('Cloudinary upload failed')
+      
+      const data = await uploadRes.json()
+      return data.secure_url || null
+    } catch (err) {
+      console.error('Video upload error:', err)
+      return null
+    }
+  }, [email])
+
   // =============================================
   // KILL ALL HARDWARE AND REDIRECT
   // =============================================
@@ -337,16 +430,52 @@ export default function Interview({ email, onComplete }) {
       micStreamRef.current.getTracks().forEach(t => t.stop())
       micStreamRef.current = null
     }
-    // Kill active recording
+    
+    // Kill active audio recording
     try {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive')
         mediaRecorderRef.current.stop()
     } catch {}
+    
     // Clear timers
     if (recordTimerRef.current) clearTimeout(recordTimerRef.current)
+    
     // Kill TTS
     try { window.speechSynthesis?.cancel() } catch {}
+    
+    // Flush and stop video recorder so all chunks are available
+    await new Promise(resolve => {
+      try {
+        if (videoRecorderRef.current && videoRecorderRef.current.state !== 'inactive') {
+          videoRecorderRef.current.addEventListener('stop', resolve, { once: true })
+          videoRecorderRef.current.requestData()
+          videoRecorderRef.current.stop()
+        } else {
+          resolve()
+        }
+      } catch { resolve() }
+    })
+    
+    // Allow final chunks to be processed
+    await new Promise(r => setTimeout(r, 400))
+    
+    // Clear fullscreen timer and exit fullscreen
+    if (fullscreenTimerRef.current) clearInterval(fullscreenTimerRef.current)
+    try { if (document.fullscreenElement) document.exitFullscreen() } catch {}
 
+    // Upload video - wait up to 25 seconds before giving up
+    let videoUrl = null
+    setStatusLabel('Saving your interview recording...')
+    try {
+      const uploadTimeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 25000)
+      )
+      videoUrl = await Promise.race([uploadVideo(), uploadTimeout])
+    } catch {
+      videoUrl = null // timed out or failed - transcript still saves without video
+    }
+
+    // Save transcript and video URL together
     try {
       await fetch('/api/complete-interview', {
         method:  'POST',
@@ -356,12 +485,14 @@ export default function Interview({ email, onComplete }) {
           disqualified: disqualifiedRef.current,
           closedEarly:  closedEarlyRef.current,
           messages:     messagesRef.current,
+          videoUrl,
         }),
       })
     } catch {}
 
-    setTimeout(() => onComplete(), 1500)
-  }, [email, onComplete, stopKeepAlive])
+    setStatusLabel('Interview complete')
+    setTimeout(() => onComplete(), 1000)
+  }, [email, onComplete, stopKeepAlive, uploadVideo])
 
   // =============================================
   // TTS - Desktop Optimized (Smooth, no sentence gaps)
@@ -492,6 +623,85 @@ export default function Interview({ email, onComplete }) {
     }
   }, [email, completeInterviewNow])
 
+  // ---- Fullscreen enforcement ----
+  useEffect(() => {
+    if (IS_IOS) return // iOS Safari does not support the Fullscreen API
+    
+    const onFsChange = () => {
+      const inFs = !!(
+        document.fullscreenElement       ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement
+      )
+      
+      if (inFs) {
+        setNeedsFullscreen(false)
+        setFullscreenWarning(false)
+        if (fullscreenTimerRef.current) {
+          clearInterval(fullscreenTimerRef.current)
+          fullscreenTimerRef.current = null
+        }
+        return
+      }
+      
+      // User left fullscreen during interview
+      if (phaseRef.current === 'ended' || phaseRef.current === 'ending' || phaseRef.current === 'initializing') return
+      
+      fullscreenViolationsRef.current += 1
+      
+      // Second violation: end the interview immediately
+      if (fullscreenViolationsRef.current >= 2) {
+        closedEarlyRef.current  = true
+        disqualifiedRef.current = true
+        if (!endingFiredRef.current) {
+          endingFiredRef.current = true
+          clearInterval(timerRef.current)
+          completeInterviewNow()
+        }
+        return
+      }
+      
+      // First violation: show 10-second countdown warning
+      setFullscreenWarning(true)
+      let count = 10
+      setFsCountdown(count)
+      
+      if (fullscreenTimerRef.current) clearInterval(fullscreenTimerRef.current)
+      
+      fullscreenTimerRef.current = setInterval(() => {
+        count--
+        setFsCountdown(count)
+        if (count <= 0) {
+          clearInterval(fullscreenTimerRef.current)
+          fullscreenTimerRef.current = null
+          const stillOut = !(document.fullscreenElement || document.webkitFullscreenElement)
+          if (stillOut) {
+            closedEarlyRef.current  = true
+            disqualifiedRef.current = true
+            if (!endingFiredRef.current) {
+              endingFiredRef.current = true
+              clearInterval(timerRef.current)
+              completeInterviewNow()
+            }
+          } else {
+            setFullscreenWarning(false)
+          }
+        }
+      }, 1000)
+    }
+    
+    document.addEventListener('fullscreenchange',       onFsChange)
+    document.addEventListener('webkitfullscreenchange', onFsChange)
+    document.addEventListener('mozfullscreenchange',    onFsChange)
+    
+    return () => {
+      document.removeEventListener('fullscreenchange',       onFsChange)
+      document.removeEventListener('webkitfullscreenchange', onFsChange)
+      document.removeEventListener('mozfullscreenchange',    onFsChange)
+      if (fullscreenTimerRef.current) clearInterval(fullscreenTimerRef.current)
+    }
+  }, [completeInterviewNow])
+
   // ---- Countdown ----
   useEffect(() => {
     timerRef.current = setInterval(() => {
@@ -569,9 +779,10 @@ export default function Interview({ email, onComplete }) {
   }, [speakText, completeInterviewNow])
 
   useEffect(() => {
+    if (needsFullscreen) return // wait until user enters fullscreen
     const t = setTimeout(() => callAI('START_INTERVIEW', []), 900)
     return () => clearTimeout(t)
-  }, [callAI])
+  }, [callAI, needsFullscreen])
 
   // =============================================
   // MIC - instant start, all platform audio formats
@@ -606,15 +817,15 @@ export default function Interview({ email, onComplete }) {
         ? new MediaRecorder(stream, { mimeType })
         : new MediaRecorder(stream)
     } catch {
-// Some browsers reject the mimeType option - fall back to no options
-try {
-  mediaRecorder = new MediaRecorder(stream)
-  recordedMimeRef.current = 'audio/webm'
-} catch {
-  setStatusLabel('Recording is not supported on this browser. Please use Chrome or Edge.')
-  micBusyRef.current = false
-  return
-}
+      // Some browsers reject the mimeType option - fall back to no options
+      try {
+        mediaRecorder = new MediaRecorder(stream)
+        recordedMimeRef.current = 'audio/webm'
+      } catch {
+        setStatusLabel('Recording is not supported on this browser. Please use Chrome or Edge.')
+        micBusyRef.current = false
+        return
+      }
     }
 
     mediaRecorderRef.current = mediaRecorder
@@ -693,12 +904,12 @@ try {
     }
 
     try {
-  mediaRecorder.start()
-} catch {
-  micBusyRef.current = false
-  setStatusLabel('Could not start recording. Please check your microphone and try again.')
-  return
-}
+      mediaRecorder.start()
+    } catch {
+      micBusyRef.current = false
+      setStatusLabel('Could not start recording. Please check your microphone and try again.')
+      return
+    }
 
     // Auto-stop after 3 minutes as a safety net
     recordTimerRef.current = setTimeout(() => {
@@ -739,6 +950,75 @@ try {
 
   return (
     <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', flexDirection: 'column', padding: 16 }}>
+
+      {/* Fullscreen required prompt - blocks the interview until user enters fullscreen */}
+      {needsFullscreen && !IS_IOS && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000,
+          background: 'rgba(13,30,48,0.97)', backdropFilter: 'blur(20px)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          justifyContent: 'center', gap: 24, padding: 32, textAlign: 'center',
+        }}>
+          <img
+            src="/logo.png"
+            alt="Scholarship Journey"
+            style={{ height: 52, objectFit: 'contain' }}
+            onError={e => { e.target.style.display = 'none' }}
+          />
+          <div style={{ fontSize: '2.2rem' }}>🖥️</div>
+          <h2 style={{ fontSize: '1.4rem', fontWeight: 700 }}>Fullscreen Required</h2>
+          <p className="text-secondary" style={{ maxWidth: 420, lineHeight: 1.7, fontSize: '0.92rem' }}>
+            This interview must run in fullscreen mode. Exiting fullscreen during the interview
+            will count as a violation and your session may be cancelled.
+          </p>
+          <button
+            className="btn btn-gold"
+            style={{ padding: '16px 40px', fontSize: '1.05rem' }}
+            onClick={enterFullscreen}
+          >
+            Enter Fullscreen and Begin Interview
+          </button>
+          <p className="text-muted" style={{ fontSize: '0.75rem' }}>
+            Do not press Escape until the interview is complete.
+          </p>
+        </div>
+      )}
+
+      {/* Fullscreen violation warning overlay */}
+      {fullscreenWarning && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 999,
+          background: 'rgba(200,40,40,0.12)', backdropFilter: 'blur(10px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32,
+        }}>
+          <div style={{
+            background: 'rgba(13,30,48,0.97)', borderRadius: 20, padding: '40px 48px',
+            border: '2px solid rgba(255,80,80,0.55)', maxWidth: 460,
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18,
+            textAlign: 'center',
+          }}>
+            <div style={{ fontSize: '2.5rem' }}>⚠️</div>
+            <h2 style={{ color: '#ff8080', fontSize: '1.3rem' }}>You Exited Fullscreen</h2>
+            <p className="text-secondary" style={{ lineHeight: 1.7, fontSize: '0.9rem' }}>
+              Please return to fullscreen immediately. If you do not return within {fsCountdown} seconds,
+              your interview will be cancelled and you will be disqualified.
+            </p>
+            <div style={{
+              fontSize: '2.2rem', fontWeight: 800, color: '#ff6060',
+              fontFamily: 'monospace', letterSpacing: '0.05em',
+            }}>
+              {fsCountdown}
+            </div>
+            <button
+              className="btn btn-gold"
+              style={{ width: '100%', padding: '14px' }}
+              onClick={enterFullscreen}
+            >
+              Return to Fullscreen Now
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* TOP BAR */}
       <div className="glass" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', marginBottom: 16, gap: 16 }}>
