@@ -96,7 +96,7 @@ export default function EmailGate({ onVerified }) {
           <RobotIcon />
         </div>
 
-        <h1 style={{ fontSize: '1.55rem', marginBottom: 6 }}>AI Interview Portal</h1>
+        <h1 style={{ fontSize: '1.55rem', marginBottom: 6 }}>Interview Portal</h1>
         <p className="text-secondary" style={{ fontSize: '0.88rem', marginBottom: 30 }}>
           AI and ML Internship Screening · Scholarship Journey
         </p>
