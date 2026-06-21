@@ -43,23 +43,15 @@ export default function PostInterview({ email }) {
   const displayRating = hoverRating || rating
 
   const handleSubmitReview = async () => {
-    const savedEmail = localStorage.getItem('sj_interview_completed_email') || email;
-    if (rating === 0 || !savedEmail) return
-    
+    if (rating === 0) return
     setSubmitting(true)
     try {
-      await fetch('/.netlify/functions/submit-review', {
+      await fetch('/api/submit-review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          email: savedEmail, 
-          rating: rating, 
-          review: review 
-        }),
+        body: JSON.stringify({ email, rating, review }),
       })
-    } catch (error) {
-      console.error('Failed to submit review', error)
-    }
+    } catch {}
     setSubmitting(false)
     setSubmitted(true)
   }

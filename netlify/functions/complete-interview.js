@@ -1,3 +1,6 @@
+// netlify/functions/complete-interview.js
+// Marks interview done, saves transcript, records used-email for cross-device blocking
+
 import { getStore } from '@netlify/blobs'
 
 const UNLIMITED_EMAILS = ['sarfraz.mb.ahmed2006@gmail.com']
@@ -31,6 +34,7 @@ export const handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Bad request' }) }
   }
 
+  // Guard: email is required
   if (!email || !email.includes('@')) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Valid email required' }) }
   }
@@ -38,7 +42,7 @@ export const handler = async (event) => {
   const isUnlimited = UNLIMITED_EMAILS.includes(email)
   const now = new Date().toISOString()
 
-  // Clean messages
+  // Clean messages — strip internal flags
   const cleanMessages = messages
     .filter(m => m.content !== 'START_INTERVIEW')
     .map(m => ({
@@ -50,56 +54,9 @@ export const handler = async (event) => {
     }))
     .filter(m => m.content.length > 0)
 
-  // ==========================================
-  // 🧠 NEW: SECURE GROQ AI GRADING ENGINE
-  // ==========================================
-  let aiRating = null;
-  let aiFeedback = null;
-
-  if (!disqualified && cleanMessages.length >= 4 && process.env.GROQ_API_KEY) {
-    try {
-      const transcriptText = cleanMessages.map(m => `${m.role === 'assistant' ? 'Interviewer' : 'Candidate'}: ${m.content}`).join('\n\n');
-
-      const prompt = `You are a strict technical recruiter. Review the following interview transcript and evaluate the candidate's performance. 
-      Return ONLY a JSON object with exactly two keys: 
-      "rating": an integer from 1 to 10 scoring their technical skills and problem-solving.
-      "feedback": a 2-3 sentence summary of their strengths and weaknesses.
-      
-      Transcript:
-      ${transcriptText}`;
-
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-          'Content-Type': 'application/json' 
-        },
-        body: JSON.stringify({
-          model: 'llama3-70b-8192',
-          messages: [
-            { role: 'system', content: 'You are an AI technical recruiter. You must return valid JSON.' },
-            { role: 'user', content: prompt }
-          ],
-          response_format: { type: 'json_object' },
-          temperature: 0.2
-        })
-      });
-
-      const data = await response.json();
-      if (data.choices && data.choices[0].message.content) {
-         const aiEval = JSON.parse(data.choices[0].message.content);
-         aiRating = aiEval.rating;
-         aiFeedback = aiEval.feedback;
-      }
-    } catch (error) {
-      // EXACTLY AFTER THE TRY BLOCK, PASTE THESE LOGS:
-      console.error("Groq AI Grading Engine failed:", error);
-      console.log("GROQ_API_KEY present:", !!process.env.GROQ_API_KEY);
-    }
-  }
-  // ==========================================
-  
   try {
+    // ---- Mark as used (cross-device blocking) ----
+    // Skip for unlimited emails so they can test unlimited times
     if (!isUnlimited) {
       const usedStore = getBlobStore('sj-used-emails')
       await usedStore.set(
@@ -108,19 +65,11 @@ export const handler = async (event) => {
       )
     }
 
+    // ---- Save transcript (always, even for unlimited) ----
     const transcriptStore = getBlobStore('sj-interview-transcripts')
     await transcriptStore.set(
       email,
-      JSON.stringify({ 
-        email, 
-        completedAt: now, 
-        disqualified, 
-        closedEarly, 
-        messages: cleanMessages, 
-        videoUrl,
-        aiRating,     // <--- Save the AI Score
-        aiFeedback    // <--- Save the AI Review
-      })
+      JSON.stringify({ email, completedAt: now, disqualified, closedEarly, messages: cleanMessages, videoUrl })
     )
 
     return { statusCode: 200, headers, body: JSON.stringify({ success: true }) }
