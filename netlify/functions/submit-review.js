@@ -1,6 +1,3 @@
-// netlify/functions/submit-review.js
-// Stores candidate ratings and review text after the interview
-
 import { getStore } from '@netlify/blobs'
 
 export const handler = async (event) => {
@@ -33,17 +30,26 @@ export const handler = async (event) => {
   }
 
   try {
-    const store = getStore('sj-interview-reviews')
-
-    await store.set(
+    // 1. Save to your original reviews database
+    const reviewStore = getStore('sj-interview-reviews')
+    await reviewStore.setJSON(email, {
       email,
-      JSON.stringify({
-        email,
-        rating,
-        review,
-        submittedAt: new Date().toISOString(),
-      })
-    )
+      rating,
+      review,
+      submittedAt: new Date().toISOString(),
+    })
+
+    // 2. ALSO attach it to the main transcript so the Admin Panel sees it!
+    const transcriptStore = getStore('sj-interview-transcripts')
+    const existingDataString = await transcriptStore.get(email)
+    
+    if (existingDataString) {
+      let existingData = JSON.parse(existingDataString)
+      // Save it as candidateRating so it doesn't overwrite the AI's technical rating
+      existingData.candidateRating = rating
+      existingData.candidateFeedback = review
+      await transcriptStore.setJSON(email, existingData)
+    }
 
     return {
       statusCode: 200,
