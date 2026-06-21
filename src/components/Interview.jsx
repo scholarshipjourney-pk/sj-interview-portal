@@ -273,8 +273,8 @@ export default function Interview({ email, onComplete }) {
     const init = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: 320, height: 240 },
-          audio: false,
+          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: true, 
         })
         if (videoRef.current) videoRef.current.srcObject = stream
         // Start silent background video recording
@@ -283,7 +283,7 @@ export default function Interview({ email, onComplete }) {
           videoMimeRef.current = vMime
           const vRecorder = new MediaRecorder(stream, {
             mimeType:           vMime,
-            videoBitsPerSecond: 250000, // low bitrate keeps 20-min file around 35-40 MB
+            videoBitsPerSecond: 600000, // low bitrate keeps 20-min file around 35-40 MB
           })
           videoChunksRef.current          = []
           vRecorder.ondataavailable = (e) => {
@@ -468,7 +468,7 @@ export default function Interview({ email, onComplete }) {
     setStatusLabel('Saving your interview recording...')
     try {
       const uploadTimeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 25000)
+        setTimeout(() => reject(new Error('timeout')), 60000)
       )
       videoUrl = await Promise.race([uploadVideo(), uploadTimeout])
     } catch {
