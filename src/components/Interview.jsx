@@ -219,8 +219,6 @@ export default function Interview({ email, onComplete }) {
   const [currentAiText, setCurrentAiText] = useState('')
   const [questionIndex, setQuestionIndex] = useState(0)
   const [timeLeft,      setTimeLeft]      = useState(TOTAL_SECONDS)
-  const [showTextInput, setShowTextInput] = useState(false)
-  const [textDraft,     setTextDraft]     = useState('')
   const [statusLabel,   setStatusLabel]   = useState('Connecting...')
 
   const messagesRef        = useRef([])
@@ -592,7 +590,7 @@ export default function Interview({ email, onComplete }) {
         micStreamRef.current = stream
       } catch {
         setShowTextInput(true)
-        setStatusLabel('Mic blocked or unavailable. Type your answer below.')
+        setStatusLabel('Mic blocked or unavailable. Please check your microphone settings.')
         micBusyRef.current = false
         return
       }
@@ -608,16 +606,15 @@ export default function Interview({ email, onComplete }) {
         ? new MediaRecorder(stream, { mimeType })
         : new MediaRecorder(stream)
     } catch {
-      // Some browsers reject the mimeType option - fall back to no options
-      try {
-        mediaRecorder = new MediaRecorder(stream)
-        recordedMimeRef.current = 'audio/webm'
-      } catch {
-        setShowTextInput(true)
-        setStatusLabel('Recording not supported on this browser. Type your answer below.')
-        micBusyRef.current = false
-        return
-      }
+// Some browsers reject the mimeType option - fall back to no options
+try {
+  mediaRecorder = new MediaRecorder(stream)
+  recordedMimeRef.current = 'audio/webm'
+} catch {
+  setStatusLabel('Recording is not supported on this browser. Please use Chrome or Edge.')
+  micBusyRef.current = false
+  return
+}
     }
 
     mediaRecorderRef.current = mediaRecorder
@@ -681,7 +678,7 @@ export default function Interview({ email, onComplete }) {
             setTimeout(() => transcribeAndSend(1), 2000)
           } else {
             setPhase('waiting')
-            setStatusLabel('Could not process response. Press mic to try again or type below.')
+            setStatusLabel('Could not process response. Press mic to try again.')
           }
         }
       }
@@ -696,13 +693,12 @@ export default function Interview({ email, onComplete }) {
     }
 
     try {
-      mediaRecorder.start()
-    } catch {
-      micBusyRef.current = false
-      setShowTextInput(true)
-      setStatusLabel('Could not start recording. Type your answer below.')
-      return
-    }
+  mediaRecorder.start()
+} catch {
+  micBusyRef.current = false
+  setStatusLabel('Could not start recording. Please check your microphone and try again.')
+  return
+}
 
     // Auto-stop after 3 minutes as a safety net
     recordTimerRef.current = setTimeout(() => {
@@ -720,14 +716,6 @@ export default function Interview({ email, onComplete }) {
         mediaRecorderRef.current.stop()
     } catch {}
   }, [])
-
-  const handleTextSubmit = useCallback(() => {
-    const text = textDraft.trim()
-    if (!text) return
-    setTextDraft('')
-    setShowTextInput(false)
-    callAI(text, messagesRef.current)
-  }, [textDraft, callAI])
 
   // Spacebar shortcut
   useEffect(() => {
@@ -816,15 +804,6 @@ export default function Interview({ email, onComplete }) {
 
           {!isEnding && (
             <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {showTextInput && (
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input className="input" placeholder="Type your answer and press Enter..."
-                    value={textDraft} onChange={e => setTextDraft(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleTextSubmit()} autoFocus />
-                  <button className="btn btn-gold" style={{ padding: '14px 18px', flexShrink: 0 }}
-                    onClick={handleTextSubmit} disabled={!textDraft.trim()}>Send</button>
-                </div>
-              )}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
                 <button
                   className={`mic-btn ${isListening ? 'recording' : ''}`}
@@ -841,13 +820,6 @@ export default function Interview({ email, onComplete }) {
                     {isListening ? 'Speak clearly, then click stop' : 'or press Spacebar'}
                   </div>
                 </div>
-                {!showTextInput && (
-                  <button className="btn btn-ghost" style={{ padding: '8px 14px', fontSize: '0.78rem', marginLeft: 'auto' }}
-                    onClick={() => { setShowTextInput(true); setStatusLabel('Type your answer below') }}
-                    disabled={!canInteract}>
-                    Type instead
-                  </button>
-                )}
               </div>
             </div>
           )}
