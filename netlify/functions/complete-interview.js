@@ -56,7 +56,6 @@ export const handler = async (event) => {
   let aiRating = null;
   let aiFeedback = null;
 
-  // Only grade them if they actually answered questions, weren't caught cheating, and the key exists
   if (!disqualified && cleanMessages.length >= 4 && process.env.GROQ_API_KEY) {
     try {
       const transcriptText = cleanMessages.map(m => `${m.role === 'assistant' ? 'Interviewer' : 'Candidate'}: ${m.content}`).join('\n\n');
@@ -69,7 +68,6 @@ export const handler = async (event) => {
       Transcript:
       ${transcriptText}`;
 
-      // Call Groq API
       const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 
@@ -77,13 +75,13 @@ export const handler = async (event) => {
           'Content-Type': 'application/json' 
         },
         body: JSON.stringify({
-          model: 'llama3-70b-8192', // Using Llama 3 70B for high-quality evaluation
+          model: 'llama3-70b-8192',
           messages: [
             { role: 'system', content: 'You are an AI technical recruiter. You must return valid JSON.' },
             { role: 'user', content: prompt }
           ],
           response_format: { type: 'json_object' },
-          temperature: 0.2 // Keep it low for consistent, analytical grading
+          temperature: 0.2
         })
       });
 
@@ -94,11 +92,13 @@ export const handler = async (event) => {
          aiFeedback = aiEval.feedback;
       }
     } catch (error) {
+      // EXACTLY AFTER THE TRY BLOCK, PASTE THESE LOGS:
       console.error("Groq AI Grading Engine failed:", error);
+      console.log("GROQ_API_KEY present:", !!process.env.GROQ_API_KEY);
     }
   }
   // ==========================================
-
+  
   try {
     if (!isUnlimited) {
       const usedStore = getBlobStore('sj-used-emails')
