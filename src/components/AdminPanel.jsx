@@ -14,6 +14,11 @@ function StatusBadge({ record }) {
 function TranscriptModal({ data, onClose }) {
   if (!data) return null
   const msgs = data.transcript?.messages || []
+  
+  // Safely grab the candidate rating and feedback from our new transcript fields (or fallback to old review object)
+  const candidateRating = data.transcript?.candidateRating || data.review?.rating;
+  const candidateFeedback = data.transcript?.candidateFeedback || data.review?.review;
+
   return (
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)',
@@ -38,7 +43,7 @@ function TranscriptModal({ data, onClose }) {
               { label: 'Completed', val: data.status.completedAt ? new Date(data.status.completedAt).toLocaleString() : 'No' },
               { label: 'Disqualified', val: data.status.disqualified ? 'Yes' : 'No' },
               { label: 'Closed early', val: data.status.closedEarly ? 'Yes' : 'No' },
-              { label: 'Rating', val: data.review?.rating ? `${data.review.rating}/5` : 'None' },
+              { label: 'Candidate Rating', val: candidateRating ? `${candidateRating}/5` : 'None' },
               { label: 'Video', val: data.transcript?.videoUrl ? <a href={data.transcript.videoUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--gold)' }}>Watch Recording</a> : 'Not saved' },
             ].map(item => (
               <div key={item.label} style={{ background: 'rgba(0,0,0,0.2)', padding: '6px 12px', borderRadius: 8 }}>
@@ -49,10 +54,20 @@ function TranscriptModal({ data, onClose }) {
           </div>
         )}
 
-        {data.review?.review && (
+        {/* Updated Candidate Feedback Section */}
+        {(candidateRating || candidateFeedback) && (
           <div style={{ background: 'rgba(253,179,2,0.08)', border: '1px solid rgba(253,179,2,0.2)', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            <div style={{ fontSize: '0.68rem', color: 'var(--gold)', fontWeight: 700, marginBottom: 4 }}>CANDIDATE REVIEW</div>
-            {data.review.review}
+            <div style={{ fontSize: '0.68rem', color: 'var(--gold)', fontWeight: 700, marginBottom: 6 }}>CANDIDATE'S EXPERIENCE FEEDBACK</div>
+            {candidateRating && (
+              <div style={{ marginBottom: candidateFeedback ? 4 : 0 }}>
+                <strong style={{ color: 'var(--text-white)' }}>Stars:</strong> {candidateRating} / 5
+              </div>
+            )}
+            {candidateFeedback && (
+              <div>
+                <strong style={{ color: 'var(--text-white)' }}>Comment:</strong> "{candidateFeedback}"
+              </div>
+            )}
           </div>
         )}
 
@@ -228,8 +243,9 @@ export default function AdminPanel() {
                       </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-                      {r.review?.rating && (
-                        <span style={{ fontSize: '0.78rem', color: 'var(--gold)' }}>{'★'.repeat(r.review.rating)}</span>
+                      {/* Show stars in the main list if they exist in either place */}
+                      {(r.transcript?.candidateRating || r.review?.rating) && (
+                        <span style={{ fontSize: '0.78rem', color: 'var(--gold)' }}>{'★'.repeat(r.transcript?.candidateRating || r.review?.rating)}</span>
                       )}
                       <StatusBadge record={r} />
                       {r.used && (
