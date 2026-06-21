@@ -1,4 +1,4 @@
-# Scholarship Journey — AI Interview Portal
+# Scholarship Journey — SJ Interview Portal
 
 A fully automated, AI-driven video interview platform for screening AI and ML internship candidates. Built with React, Netlify Functions, Groq (free Llama 3.3 70B), and Netlify Blobs storage.
 
@@ -58,7 +58,7 @@ Groq free tier limits (more than enough for 100 applicants):
 cd scholarship-interview
 git init
 git add .
-git commit -m "Initial commit — SJ AI Interview Portal"
+git commit -m "Initial commit — SJ Interview Portal"
 ```
 
 Create a new repository on GitHub (private recommended), then:
