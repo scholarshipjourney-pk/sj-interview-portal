@@ -100,7 +100,7 @@ export default function Instructions({ email, onStart }) {
           />
           <div className="sj-logo-icon" style={{ display: 'none' }}>SJ</div>
           <div>
-            <div style={{ fontWeight: 700, fontSize: '1rem' }}>AI Interview Portal</div>
+            <div style={{ fontWeight: 700, fontSize: '1rem' }}>SJ Interview Portal</div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>AI and ML Internship Screening</div>
           </div>
           <div style={{ marginLeft: 'auto', textAlign: 'right' }}>

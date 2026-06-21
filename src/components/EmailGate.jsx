@@ -55,7 +55,7 @@ export default function EmailGate({ onVerified }) {
       } else if (data.reason === 'already_used') {
         setError('This email has already been used for an interview. Each candidate gets one attempt only.')
       } else if (data.reason === 'not_whitelisted') {
-        setError('This email is not on the invite list. Please check your invitation email or contact careers@scholarshipjourney.pk')
+        setError('This email is not on the invite list. Please check your invitation email or contact info@scholarshipjourney.pk')
       } else {
         setError('Something went wrong. Please try again in a moment.')
       }
