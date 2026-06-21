@@ -15,9 +15,9 @@ function TranscriptModal({ data, onClose }) {
   if (!data) return null
   const msgs = data.transcript?.messages || []
   
-  // Safely grab the candidate rating and feedback from our new transcript fields (or fallback to old review object)
-  const candidateRating = data.transcript?.candidateRating || data.review?.rating;
-  const candidateFeedback = data.transcript?.candidateFeedback || data.review?.review;
+// Safely grab the candidate rating and feedback from our new transcript fields (or fallback to old review object)
+  const candidateRating = data.candidateRating || data.review?.rating;
+  const candidateFeedback = data.candidateFeedback || data.review?.review;
 
   return (
     <div style={{
