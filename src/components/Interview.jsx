@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 const TOTAL_SECONDS   = 20 * 60
 const WARNING_SECONDS = 3 * 60
 const MAX_RECORD_MS   = 3 * 60 * 1000
-const MAX_AUDIO_B64   = 10 * 1024 * 1024
+const MAX_AUDIO_B64   = 4 * 1024 * 1024 // FIX: 4MB limit to prevent Netlify 413 crash
 
 // =============================================
 // PLATFORM DETECTION
@@ -61,8 +61,6 @@ function getBestVideoMimeType() {
 
 // =============================================
 // VOICE SELECTION - ALL PLATFORMS
-// FIX: now accepts a cached voices array so voices
-// are never missing on the first TTS call
 // =============================================
 function getBestMaleVoice(cachedVoices) {
   const voices = cachedVoices && cachedVoices.length > 0
@@ -248,9 +246,7 @@ export default function Interview({ email, onComplete }) {
   const videoMimeRef            = useRef('video/webm')
   const fullscreenViolationsRef = useRef(0)
   const fullscreenTimerRef      = useRef(null)
-  // FIX: cache voices so getBestMaleVoice always has them on first call
   const voicesRef               = useRef([])
-  // FIX: keep ref to camera stream so we can stop it after video recorder finishes
   const cameraStreamRef         = useRef(null)
 
   useEffect(() => { messagesRef.current    = messages },       [messages])
@@ -258,71 +254,65 @@ export default function Interview({ email, onComplete }) {
   useEffect(() => { timeLeftRef.current    = timeLeft },       [timeLeft])
   useEffect(() => { questionIdxRef.current = questionIndex },  [questionIndex])
 
-  // ---- Camera + silent video recording ----
-  // FIX 1: audio: false — camera stream must NOT capture audio.
-  // Having audio: true here creates a second audio capture that competes
-  // with the mic stream and causes transcription failures.
+  // =============================================
+  // FIX: UNIFIED MEDIA INITIALIZATION (Audio + Video)
+  // Ensures video captures audio, limits prompts to 1, and prevents Whisper crashes
+  // =============================================
   useEffect(() => {
-    const init = async () => {
+    const initMedia = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: false,  // FIX: was audio: true — that broke transcription
+          audio: true, 
         })
+        
         cameraStreamRef.current = stream
-        if (videoRef.current) videoRef.current.srcObject = stream
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+        }
 
-        // Start silent background video recording
+        micStreamRef.current = new MediaStream(stream.getAudioTracks())
+
         try {
           const vMime = getBestVideoMimeType()
           videoMimeRef.current = vMime
+          
           const vRecorder = new MediaRecorder(stream, {
-            mimeType:           vMime,
-            videoBitsPerSecond: 250000, // FIX: was 600000 — lower bitrate, smaller files
+            mimeType: vMime,
+            videoBitsPerSecond: 250000, 
           })
+          
           videoChunksRef.current = []
           vRecorder.ondataavailable = (e) => {
             if (e.data && e.data.size > 0) videoChunksRef.current.push(e.data)
           }
+          
           vRecorder.start(5000)
           videoRecorderRef.current = vRecorder
         } catch (err) {
           console.warn('Video recording unavailable on this browser:', err)
         }
-      } catch {}
+      } catch (err) {
+        console.error('Failed to get media permissions:', err)
+      }
     }
-    init()
+    
+    initMedia()
+
     return () => {
-      // Only stop camera tracks here — video recorder is stopped in completeInterviewNow
-      if (cameraStreamRef.current)
+      if (cameraStreamRef.current) {
         cameraStreamRef.current.getTracks().forEach(t => t.stop())
+      }
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach(t => t.stop())
+      }
       if (videoRecorderRef.current && videoRecorderRef.current.state !== 'inactive') {
         try { videoRecorderRef.current.stop() } catch {}
       }
     }
   }, [])
 
-  // ---- Pre-initialize mic for instant start ----
-  useEffect(() => {
-    const initMic = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        micStreamRef.current = stream
-      } catch {}
-    }
-    initMic()
-    return () => {
-      if (micStreamRef.current) {
-        micStreamRef.current.getTracks().forEach(t => t.stop())
-        micStreamRef.current = null
-      }
-    }
-  }, [])
-
   // ---- Pre-load voices, cache them in ref, and unlock browser audio ----
-  // FIX 2: voiceschanged handler now actually caches voices instead of doing nothing.
-  // This ensures getBestMaleVoice always has a populated list, fixing the
-  // female voice issue on Chromebook and other platforms.
   useEffect(() => {
     const synth = window.speechSynthesis
 
@@ -331,14 +321,12 @@ export default function Interview({ email, onComplete }) {
       if (v.length > 0) voicesRef.current = v
     }
 
-    // Unlock browser autoplay policy with a silent utterance
     try {
       const unlock = new SpeechSynthesisUtterance('')
       unlock.volume = 0
       synth.speak(unlock)
     } catch {}
 
-    // Cache immediately if already available, otherwise wait
     cacheVoices()
     synth.addEventListener('voiceschanged', cacheVoices)
     return () => synth.removeEventListener('voiceschanged', cacheVoices)
@@ -410,7 +398,6 @@ export default function Interview({ email, onComplete }) {
 
   // =============================================
   // COMPLETE INTERVIEW
-  // FIX 3 & 4: correct cleanup order + 25s upload timeout
   // =============================================
   const completeInterviewNow = useCallback(async () => {
     setPhase('ended')
@@ -420,7 +407,6 @@ export default function Interview({ email, onComplete }) {
     setFullscreenWarning(false)
     localStorage.setItem('sj_interview_completed_email', email)
 
-    // Kill mic first (audio recording)
     if (micStreamRef.current) {
       micStreamRef.current.getTracks().forEach(t => t.stop())
       micStreamRef.current = null
@@ -432,9 +418,6 @@ export default function Interview({ email, onComplete }) {
     if (recordTimerRef.current) clearTimeout(recordTimerRef.current)
     try { window.speechSynthesis?.cancel() } catch {}
 
-    // FIX 3: Stop video recorder BEFORE killing camera tracks.
-    // Previous version killed camera tracks first, cutting off the recorder's source
-    // mid-recording and corrupting the final video data.
     await new Promise(resolve => {
       try {
         if (videoRecorderRef.current && videoRecorderRef.current.state !== 'inactive') {
@@ -448,7 +431,6 @@ export default function Interview({ email, onComplete }) {
     })
     await new Promise(r => setTimeout(r, 400))
 
-    // Now safe to kill camera tracks
     if (cameraStreamRef.current) {
       cameraStreamRef.current.getTracks().forEach(t => t.stop())
       cameraStreamRef.current = null
@@ -457,12 +439,12 @@ export default function Interview({ email, onComplete }) {
     if (fullscreenTimerRef.current) clearInterval(fullscreenTimerRef.current)
     try { if (document.fullscreenElement) document.exitFullscreen() } catch {}
 
-    // FIX 4: Upload timeout was 180000ms (3 minutes). Changed to 25 seconds.
     let videoUrl = null
     setStatusLabel('Saving your interview recording...')
     try {
+      // FIX: Upload timeout increased to 60 seconds
       const uploadTimeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 25000)
+        setTimeout(() => reject(new Error('timeout')), 60000)
       )
       videoUrl = await Promise.race([uploadVideo(), uploadTimeout])
     } catch {
@@ -489,9 +471,6 @@ export default function Interview({ email, onComplete }) {
 
   // =============================================
   // TTS
-  // FIX 5: makePronounceable applied to utterance text.
-  // FIX 6: voicesRef passed to getBestMaleVoice so correct male voice is
-  //         always selected even on the very first call (fixes Chromebook female voice).
   // =============================================
   const speakText = useCallback((text, onEndCallback = null) => {
     const synth = window.speechSynthesis
@@ -501,15 +480,12 @@ export default function Interview({ email, onComplete }) {
     setPhase('ai_speaking')
     setStatusLabel('Sarfraz is speaking...')
 
-    // FIX 5: Apply pronunciation fixes before creating utterance
     const spokenText = makePronounceable(text)
     const utterance  = new SpeechSynthesisUtterance(spokenText)
     utterance.rate   = 0.95
     utterance.pitch  = 0.95
     utterance.volume = 1.0
 
-    // FIX 6: Use cached voicesRef — this ensures the correct male voice is used
-    // even on the first TTS call before voiceschanged has fired
     const voice = getBestMaleVoice(voicesRef.current)
     if (voice) utterance.voice = voice
 

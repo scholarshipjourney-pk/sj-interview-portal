@@ -44,7 +44,7 @@ export const handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'No audio data provided' }) }
   }
 
-  if (audioBase64.length > 10 * 1024 * 1024) {
+  if (audioBase64.length > 4 * 1024 * 1024) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Audio too large. Keep answers under 3 minutes.' }) }
   }
 

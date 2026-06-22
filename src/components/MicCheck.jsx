@@ -108,18 +108,18 @@ export default function MicCheck({ onPass }) {
       <div className="glass-gold fade-in-up" style={{ width: '100%', maxWidth: 480, padding: '44px 40px', textAlign: 'center' }}>
 
         <img 
-  src="/logo.png" 
-  alt="Scholarship Journey"
-  style={{ 
-    height: 44, 
-    width: 'auto', 
-    objectFit: 'contain', 
-    marginBottom: 24,
-    imageRendering: '-webkit-optimize-contrast', 
-    transform: 'translateZ(0)' 
-  }}
-  onError={e => { e.target.style.display = 'none' }} 
-/>
+          src="/logo.png" 
+          alt="Scholarship Journey"
+          style={{ 
+            height: 44, 
+            width: 'auto', 
+            objectFit: 'contain', 
+            marginBottom: 24,
+            imageRendering: '-webkit-optimize-contrast', 
+            transform: 'translateZ(0)' 
+          }}
+          onError={e => { e.target.style.display = 'none' }} 
+        />
 
         <h2 style={{ marginBottom: 8 }}>Microphone Check</h2>
         <p className="text-secondary" style={{ fontSize: '0.88rem', marginBottom: 32, lineHeight: 1.6 }}>
@@ -182,7 +182,15 @@ export default function MicCheck({ onPass }) {
               <button
                 className="btn"
                 style={{ width: '100%', background: '#80e8a0', color: '#0d1e30', fontWeight: 700 }}
-                onClick={onPass}
+                onClick={() => {
+                  // FIX: Unlock iOS Safari Audio Context on user tap
+                  try {
+                    const unlock = new SpeechSynthesisUtterance('')
+                    unlock.volume = 0
+                    window.speechSynthesis.speak(unlock)
+                  } catch (e) {}
+                  onPass()
+                }}
               >
                 Sounds Good, Start Interview
               </button>
