@@ -439,17 +439,30 @@ export default function Interview({ email, onComplete }) {
     if (fullscreenTimerRef.current) clearInterval(fullscreenTimerRef.current)
     try { if (document.fullscreenElement) document.exitFullscreen() } catch {}
 
+    // --- NEW 4-MINUTE DYNAMIC UPLOAD CODE STARTS HERE ---
     let videoUrl = null
-    setStatusLabel('Saving your interview recording...')
+    setStatusLabel('Saving your interview recording... This usually takes about 30 seconds.')
+
+    const messageTimer1 = setTimeout(() => {
+      setStatusLabel('Your internet connection seems a bit slow. We are still saving your video. Please bear with us...')
+    }, 30000) 
+
+    const messageTimer2 = setTimeout(() => {
+      setStatusLabel('Almost there! Large video files take a bit longer on slower networks. Thank you for your patience.')
+    }, 90000) 
+
     try {
-      // FIX: Upload timeout increased to 60 seconds
       const uploadTimeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 60000)
+        setTimeout(() => reject(new Error('timeout')), 240000)
       )
       videoUrl = await Promise.race([uploadVideo(), uploadTimeout])
     } catch {
       videoUrl = null
     }
+
+    clearTimeout(messageTimer1)
+    clearTimeout(messageTimer2)
+    // --- NEW 4-MINUTE DYNAMIC UPLOAD CODE ENDS HERE ---
 
     try {
       await fetch('/api/complete-interview', {
@@ -1035,11 +1048,11 @@ export default function Interview({ email, onComplete }) {
 
           {isEnding && (
             <div
-              className={`alert ${statusLabel === 'Saving your interview recording...' ? 'alert-error' : 'alert-success'}`}
+              className={`alert ${statusLabel !== 'Interview complete' ? 'alert-error' : 'alert-success'}`}
               style={{ width: '100%', textAlign: 'center' }}
             >
-              {statusLabel === 'Saving your interview recording...'
-                ? <><span className="spinner" style={{ marginRight: 8 }} /> Saving video... Please DO NOT close this tab.</>
+              {statusLabel !== 'Interview complete'
+                ? <><span className="spinner" style={{ marginRight: 8 }} /> {statusLabel}</>
                 : 'Interview complete. Redirecting...'}
             </div>
           )}
