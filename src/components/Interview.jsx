@@ -258,11 +258,13 @@ export default function Interview({ email, onComplete }) {
   // FIX: UNIFIED MEDIA INITIALIZATION (Audio + Video)
   // Ensures video captures audio, limits prompts to 1, and prevents Whisper crashes
   // =============================================
-  useEffect(() => {
-    const initMedia = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+const stream = await navigator.mediaDevices.getUserMedia({
+          video: { 
+            facingMode: 'user', 
+            width: { ideal: 1280 }, 
+            height: { ideal: 720 },
+            frameRate: { ideal: 24, max: 30 } // Add this line here
+          },
           audio: true, 
         })
         
@@ -1062,7 +1064,7 @@ export default function Interview({ email, onComplete }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="glass" style={{ padding: 10, aspectRatio: '4/3', position: 'relative', overflow: 'hidden' }}>
             <video ref={videoRef} autoPlay muted playsInline className="candidate-video" style={{ borderRadius: 8 }} />
-            <div style={{ position: 'absolute', top: 14, left: 14, display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)', padding: '3px 10px', borderRadius: 20, fontSize: '0.7rem', fontWeight: 700, color: '#ff8080' }}>
+            <div style={{ position: 'absolute', top: 14, left: 14, display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(0,0,0,0.85)', padding: '3px 10px', borderRadius: 20, fontSize: '0.7rem', fontWeight: 700, color: '#ff8080' }}>
               <div className="status-dot" style={{ width: 5, height: 5 }} />YOU
             </div>
           </div>
