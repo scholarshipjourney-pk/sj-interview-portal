@@ -291,7 +291,7 @@ export default function Interview({ email, onComplete }) {
             if (e.data && e.data.size > 0) videoChunksRef.current.push(e.data)
           }
           
-          vRecorder.start(5000)
+          vRecorder.start(10000)
           videoRecorderRef.current = vRecorder
         } catch (err) {
           console.warn('Video recording unavailable on this browser:', err)
@@ -1065,7 +1065,7 @@ export default function Interview({ email, onComplete }) {
         {/* RIGHT: Camera */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="glass" style={{ padding: 10, aspectRatio: '4/3', position: 'relative', overflow: 'hidden' }}>
-            <video ref={videoRef} autoPlay muted playsInline className="candidate-video" style={{ borderRadius: 8 }} />
+            <video ref={videoRef} autoPlay muted playsInline className="candidate-video" style={{ borderRadius: 8, willChange: 'transform' }} />
             <div style={{ position: 'absolute', top: 14, left: 14, display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(0,0,0,0.85)', padding: '3px 10px', borderRadius: 20, fontSize: '0.7rem', fontWeight: 700, color: '#ff8080' }}>
               <div className="status-dot" style={{ width: 5, height: 5 }} />YOU
             </div>
