@@ -254,16 +254,18 @@ export default function Interview({ email, onComplete }) {
   useEffect(() => { timeLeftRef.current    = timeLeft },       [timeLeft])
   useEffect(() => { questionIdxRef.current = questionIndex },  [questionIndex])
 
+// =============================================
+  // FIX: UNIFIED MEDIA INITIALIZATION
   // =============================================
-  // FIX: UNIFIED MEDIA INITIALIZATION (Audio + Video)
-  // Ensures video captures audio, limits prompts to 1, and prevents Whisper crashes
-  // =============================================
-const stream = await navigator.mediaDevices.getUserMedia({
+  useEffect(() => {
+    const initMedia = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
           video: { 
             facingMode: 'user', 
             width: { ideal: 1280 }, 
             height: { ideal: 720 },
-            frameRate: { ideal: 24, max: 30 } // Add this line here
+            frameRate: { ideal: 24, max: 30 }
           },
           audio: true, 
         })
@@ -298,7 +300,7 @@ const stream = await navigator.mediaDevices.getUserMedia({
         console.error('Failed to get media permissions:', err)
       }
     }
-    
+
     initMedia()
 
     return () => {
