@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 const TOTAL_SECONDS   = 20 * 60
 const WARNING_SECONDS = 3 * 60
 const MAX_RECORD_MS   = 3 * 60 * 1000
-const MAX_AUDIO_B64   = 4 * 1024 * 1024 // FIX: 4MB limit to prevent Netlify 413 crash
+const MAX_AUDIO_B64   = 4 * 1024 * 1024 // 4MB limit to prevent Netlify 413 crash
 
 // =============================================
 // PLATFORM DETECTION
@@ -221,6 +221,7 @@ export default function Interview({ email, onComplete }) {
   const [needsFullscreen,   setNeedsFullscreen]   = useState(!IS_IOS)
   const [fullscreenWarning, setFullscreenWarning] = useState(false)
   const [fsCountdown,       setFsCountdown]       = useState(10)
+  const [isOnline,          setIsOnline]          = useState(navigator.onLine)
 
   const messagesRef             = useRef([])
   const phaseRef                = useRef('initializing')
@@ -248,13 +249,26 @@ export default function Interview({ email, onComplete }) {
   const fullscreenTimerRef      = useRef(null)
   const voicesRef               = useRef([])
   const cameraStreamRef         = useRef(null)
+  const ttsTimeoutRef           = useRef(null) // Fix for TTS hanging
 
   useEffect(() => { messagesRef.current    = messages },       [messages])
   useEffect(() => { phaseRef.current       = phase },          [phase])
   useEffect(() => { timeLeftRef.current    = timeLeft },       [timeLeft])
   useEffect(() => { questionIdxRef.current = questionIndex },  [questionIndex])
 
-// =============================================
+  // Network status listeners (Fixes silent network drops)
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true)
+    const handleOffline = () => setIsOnline(false)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [])
+
+  // =============================================
   // FIX: UNIFIED MEDIA INITIALIZATION
   // =============================================
   useEffect(() => {
@@ -443,7 +457,6 @@ export default function Interview({ email, onComplete }) {
     if (fullscreenTimerRef.current) clearInterval(fullscreenTimerRef.current)
     try { if (document.fullscreenElement) document.exitFullscreen() } catch {}
 
-    // --- NEW 4-MINUTE DYNAMIC UPLOAD CODE STARTS HERE ---
     let videoUrl = null
     setStatusLabel('Saving your interview recording... This usually takes about 30 seconds.')
 
@@ -466,7 +479,6 @@ export default function Interview({ email, onComplete }) {
 
     clearTimeout(messageTimer1)
     clearTimeout(messageTimer2)
-    // --- NEW 4-MINUTE DYNAMIC UPLOAD CODE ENDS HERE ---
 
     try {
       await fetch('/api/complete-interview', {
@@ -487,13 +499,15 @@ export default function Interview({ email, onComplete }) {
   }, [email, onComplete, stopKeepAlive, uploadVideo])
 
   // =============================================
-  // TTS
+  // TTS (BULLETPROOFED WITH TIMEOUTS)
   // =============================================
   const speakText = useCallback((text, onEndCallback = null) => {
     const synth = window.speechSynthesis
     try { synth.cancel() } catch {}
+    
+    if (ttsTimeoutRef.current) clearTimeout(ttsTimeoutRef.current)
+    
     ttsActiveRef.current = true
-
     setPhase('ai_speaking')
     setStatusLabel('Sarfraz is speaking...')
 
@@ -508,34 +522,43 @@ export default function Interview({ email, onComplete }) {
 
     utteranceRef.current = utterance
 
-    utterance.onend = () => {
-      ttsActiveRef.current = false
-      utteranceRef.current = null
-      if (onEndCallback) { onEndCallback(); return }
+    let resolved = false;
+    const safeResolve = () => {
+      if (resolved) return;
+      resolved = true;
+      if (ttsTimeoutRef.current) clearTimeout(ttsTimeoutRef.current);
+      ttsActiveRef.current = false;
+      utteranceRef.current = null;
+      
+      if (onEndCallback) { 
+        onEndCallback(); 
+        return; 
+      }
       if (phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
         setPhase('waiting')
         setStatusLabel('Your turn, press the mic or Spacebar to answer')
       }
-    }
+    };
 
+    utterance.onend = safeResolve;
     utterance.onerror = (e) => {
       if (e.error !== 'interrupted' && e.error !== 'canceled') {
         console.warn('TTS Error:', e.error)
       }
-      ttsActiveRef.current = false
-      utteranceRef.current = null
-      if (!onEndCallback && phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
-        setPhase('waiting')
-        setStatusLabel('Your turn, press the mic or Spacebar to answer')
-      }
+      safeResolve();
     }
+
+    // THE FIX: Hard timeout fallback. 80ms per character + 3s buffer.
+    // If old Chromebook crashes, this forces the app to un-freeze.
+    const timeoutMs = Math.max(5000, text.length * 80);
+    ttsTimeoutRef.current = setTimeout(safeResolve, timeoutMs);
 
     setTimeout(() => {
       try {
         synth.speak(utterance)
       } catch (err) {
         console.warn('synth.speak threw:', err)
-        utterance.onend()
+        safeResolve()
       }
     }, 50)
   }, [])
@@ -912,6 +935,16 @@ export default function Interview({ email, onComplete }) {
     return () => window.removeEventListener('keydown', handler)
   }, [phase, startListening, stopListening])
 
+  // Allow user to manually skip TTS if it lags or breaks
+  const skipTTS = useCallback(() => {
+    try { window.speechSynthesis?.cancel() } catch {}
+    if (ttsTimeoutRef.current) clearTimeout(ttsTimeoutRef.current);
+    ttsActiveRef.current = false;
+    utteranceRef.current = null;
+    setPhase('waiting')
+    setStatusLabel('Skipped voice. Your turn, press the mic to answer.')
+  }, [])
+
   const canInteract = phase === 'waiting'
   const isListening = phase === 'listening'
   const isEnding    = phase === 'ending' || phase === 'ended'
@@ -920,6 +953,21 @@ export default function Interview({ email, onComplete }) {
 
   return (
     <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', flexDirection: 'column', padding: 16 }}>
+
+      {/* Network Disconnection Warning Overlay */}
+      {!isOnline && !isEnding && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 10000,
+          background: 'rgba(200,40,40,0.95)', backdropFilter: 'blur(10px)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 32, textAlign: 'center', color: 'white'
+        }}>
+          <div style={{ fontSize: '3rem', marginBottom: 16 }}>📡</div>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: 8 }}>Connection Lost</h2>
+          <p style={{ fontSize: '1rem', opacity: 0.9 }}>
+            Your internet connection was interrupted. The interview is paused. Please check your Wi-Fi and wait to reconnect.
+          </p>
+        </div>
+      )}
 
       {/* Fullscreen required prompt */}
       {needsFullscreen && !IS_IOS && (
@@ -1028,7 +1076,19 @@ export default function Interview({ email, onComplete }) {
             <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>{statusLabel}</span>
           </div>
 
-          {!isEnding && (
+          {/* Skip TTS Button - Shows only when AI is speaking */}
+          {phase === 'ai_speaking' && (
+            <div style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
+              <button 
+                onClick={skipTTS}
+                style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', color: 'var(--text-muted)', padding: '6px 16px', borderRadius: 6, fontSize: '0.75rem', cursor: 'pointer' }}
+              >
+                Skip Voice ▶
+              </button>
+            </div>
+          )}
+
+          {!isEnding && phase !== 'ai_speaking' && (
             <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
                 <button

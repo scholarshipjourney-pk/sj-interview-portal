@@ -1,5 +1,5 @@
 // netlify/functions/chat.js
-// Bulletproof 6-Key Auto-Rotation System with 7-Second Timeouts & Fallbacks
+// Bulletproof 6-Key Auto-Rotation System with Fallbacks & Anti-Robotic Prompting
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
@@ -8,7 +8,7 @@ const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct';
 
 const MAX_TOKENS = 280;
-const FETCH_TIMEOUT_MS = 7000; // Updated to 7 seconds based on Claude's advice
+const FETCH_TIMEOUT_MS = 6500; // Reduced to 6.5s to stay safely under Netlify's 10s limit
 
 const SYSTEM_PROMPT = `You are Sarfraz Ahmed. You are conducting a 20-minute AI and ML Internship screening interview.
 
@@ -24,6 +24,12 @@ YOUR PERSONA & ACCENT HANDLING:
 - The candidate is speaking through a web mic. Their transcribed text will often lack punctuation or have incorrect words due to their Pakistani accent. You must be highly forgiving, look past the spelling errors, and focus entirely on the technical keywords.
 - Never use bullet points, numbered lists, or formal document formatting in your responses.
 - Your name is Sarfraz Ahmed. Do not add any title like "senior recruiter".
+
+ANTI-ROBOTIC CONVERSATIONAL RULES (CRITICAL):
+- NEVER just say "Great", "Okay", or "Sounds good" and ask the next question.
+- You MUST reference something specific the candidate just said before moving on. 
+- Example: If they mention using Pandas, say "I see you're comfortable with Pandas. When cleaning that messy dataset, what was your biggest challenge?" 
+- Make it feel like a natural, flowing conversation.
 
 CRITICAL RULES FOR ENDING THE INTERVIEW:
 1. EARLY QUIT: If the candidate says "close the interview", "stop", or "quit", DO NOT append the end tag yet. Instead, ask them: "Are you sure you want to end the interview early?"
@@ -71,7 +77,7 @@ async function fetchAI(endpoint, apiKey, model, messages, isOpenRouter = false) 
     model: model,
     messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages],
     max_tokens: MAX_TOKENS,
-    temperature: 0.3,
+    temperature: 0.4, // Slightly higher temp for more natural, less robotic responses
     top_p: 0.9,
   };
 
@@ -92,17 +98,9 @@ async function fetchAI(endpoint, apiKey, model, messages, isOpenRouter = false) 
     
     clearTimeout(timeoutId);
 
-    if (response.status === 429) {
-      throw new Error('RATE_LIMIT_EXCEEDED');
-    }
-    
-    if (response.status >= 500) {
-      throw new Error('SERVER_ERROR');
-    }
-
-    if (!response.ok) {
-      throw new Error('CRITICAL_API_ERROR');
-    }
+    if (response.status === 429) throw new Error('RATE_LIMIT_EXCEEDED');
+    if (response.status >= 500) throw new Error('SERVER_ERROR');
+    if (!response.ok) throw new Error('CRITICAL_API_ERROR');
 
     const data = await response.json();
     return data.choices?.[0]?.message?.content?.trim();
@@ -157,9 +155,7 @@ export const handler = async (event) => {
       }
     } catch (error) {
       console.log(`GROQ_KEY_${i + 1} skipped due to: ${error.message || error.name}`);
-      if (error.message === 'CRITICAL_API_ERROR') {
-        continue;
-      }
+      if (error.message === 'CRITICAL_API_ERROR') continue;
     }
   }
 
