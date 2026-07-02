@@ -254,7 +254,8 @@ export default function Interview({ email, onComplete }) {
   const voicesRef               = useRef([])
   const cameraStreamRef         = useRef(null)
   const ttsTimeoutRef           = useRef(null)
-  const skipRequestedRef        = useRef(false) // Fix for skipTTS race condition
+  const skipRequestedRef        = useRef(false)
+  const startedRef              = useRef(false) // Fix for StrictMode double-fire
 
   useEffect(() => { messagesRef.current    = messages },       [messages])
   useEffect(() => { phaseRef.current       = phase },          [phase])
@@ -302,7 +303,7 @@ export default function Interview({ email, onComplete }) {
           
           const vRecorder = new MediaRecorder(stream, {
             mimeType: vMime,
-            videoBitsPerSecond: 500000, // Bumped to 500kbps for better quality
+            videoBitsPerSecond: 500000, 
           })
           
           videoChunksRef.current = []
@@ -513,7 +514,6 @@ export default function Interview({ email, onComplete }) {
   // TTS (BULLETPROOFED WITH TIMEOUTS & GUARDS)
   // =============================================
   const speakText = useCallback((text, onEndCallback = null) => {
-    // Guard for old browsers
     if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
       if (onEndCallback) { onEndCallback(); return; }
       setPhase('waiting')
@@ -533,7 +533,6 @@ export default function Interview({ email, onComplete }) {
     const spokenText = makePronounceable(text)
     const utterance  = new SpeechSynthesisUtterance(spokenText)
     
-    // Use the platform-specific TTS_RATE constant
     utterance.rate   = TTS_RATE
     utterance.pitch  = 0.95
     utterance.volume = 1.0
@@ -576,7 +575,6 @@ export default function Interview({ email, onComplete }) {
       safeResolve();
     }
 
-    // Hard timeout fallback. 80ms per character + 3s buffer.
     const timeoutMs = Math.max(5000, text.length * 80);
     ttsTimeoutRef.current = setTimeout(safeResolve, timeoutMs);
 
@@ -786,7 +784,6 @@ export default function Interview({ email, onComplete }) {
       messagesRef.current = withReply
       setCurrentAiText(safeReply)
       
-      // Fix: Only increment progress dots if it's an actual question
       if (safeReply.includes('?')) {
         setQuestionIndex(q => Math.min(q + 1, 5))
       }
@@ -807,15 +804,16 @@ export default function Interview({ email, onComplete }) {
     }
   }, [speakText, completeInterviewNow])
 
-  // Start interview & Keepalive
+  // Start interview & Keepalive (StrictMode Safe)
   useEffect(() => {
     if (needsFullscreen) return
-    startKeepAlive() // Fix: Actually start the keepalive for iOS
-    const t = setTimeout(() => callAI('START_INTERVIEW', []), 900)
-    return () => {
-      clearTimeout(t)
-      stopKeepAlive()
+    startKeepAlive()
+    if (!startedRef.current) {
+      startedRef.current = true
+      const t = setTimeout(() => callAI('START_INTERVIEW', []), 900)
+      return () => clearTimeout(t)
     }
+    return () => stopKeepAlive()
   }, [callAI, needsFullscreen, startKeepAlive, stopKeepAlive])
 
   // =============================================
@@ -971,7 +969,6 @@ export default function Interview({ email, onComplete }) {
     return () => window.removeEventListener('keydown', handler)
   }, [phase, startListening, stopListening])
 
-  // Fix: Clean skipTTS implementation using ref to avoid race condition
   const skipTTS = useCallback(() => {
     skipRequestedRef.current = true
     try { window.speechSynthesis?.cancel() } catch {}
