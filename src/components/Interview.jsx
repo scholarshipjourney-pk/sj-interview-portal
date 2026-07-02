@@ -19,10 +19,8 @@ const IS_SAFARI  = /^((?!chrome|android).)*safari/i.test(ua)
 const IS_FIREFOX = /Firefox/.test(ua)
 const IS_MOBILE  = IS_IOS || IS_ANDROID
 
-const NEEDS_KEEPALIVE    = IS_MOBILE
-const TTS_RATE           = IS_IOS ? 0.85 : IS_MOBILE ? 0.88 : 0.92
-const SENTENCE_GAP_MS    = IS_IOS ? 160 : IS_ANDROID ? 100 : 60
-const TTS_START_DELAY_MS = IS_IOS ? 220 : IS_ANDROID ? 100 : 50
+const NEEDS_KEEPALIVE = IS_MOBILE
+const TTS_RATE        = IS_IOS ? 0.85 : IS_MOBILE ? 0.88 : 0.92
 
 // =============================================
 // AUDIO MIME TYPE
@@ -65,7 +63,7 @@ function getBestVideoMimeType() {
 function getBestMaleVoice(cachedVoices) {
   const voices = cachedVoices && cachedVoices.length > 0
     ? cachedVoices
-    : window.speechSynthesis.getVoices()
+    : window.speechSynthesis?.getVoices() || []
 
   if (!voices || voices.length === 0) return null
 
@@ -121,8 +119,6 @@ function cleanText(text) {
   return (text || '')
     .replace(/\[TIME_WARNING\]/gi, '')
     .replace(/\[END_INTERVIEW[^\]]*\]/gi, '')
-    .replace(/TIME_WARNING/g, '')
-    .replace(/END_INTERVIEW/g, '')
     .trim()
 }
 
@@ -131,7 +127,15 @@ function makePronounceable(text) {
     .replace(/\bLLMs?\b/g, 'L L M')
     .replace(/\bAPIs?\b/g, 'A P I')
     .replace(/\bML\b/g, 'M L')
+    .replace(/\bAI\b/g, 'A I')
     .replace(/\bNLP\b/g, 'N L P')
+    .replace(/\bGPT\b/g, 'G P T')
+    .replace(/\bBERT\b/g, 'Bert')
+    .replace(/\bTensorFlow\b/g, 'Tensor Flow')
+    .replace(/\bScikit\b/g, 'Sy-kit')
+    .replace(/\bPyTorch\b/g, 'Pie Torch')
+    .replace(/\bNumPy\b/g, 'Num Pie')
+    .replace(/\bPandas\b/g, 'Pan Das')
     .replace(/\bYOLOv(\d+)\b/gi, 'YOLO version $1')
     .replace(/\bRAG\b/g, 'Rag')
     .replace(/\bCNN\b/g, 'C N N')
@@ -249,14 +253,15 @@ export default function Interview({ email, onComplete }) {
   const fullscreenTimerRef      = useRef(null)
   const voicesRef               = useRef([])
   const cameraStreamRef         = useRef(null)
-  const ttsTimeoutRef           = useRef(null) // Fix for TTS hanging
+  const ttsTimeoutRef           = useRef(null)
+  const skipRequestedRef        = useRef(false) // Fix for skipTTS race condition
 
   useEffect(() => { messagesRef.current    = messages },       [messages])
   useEffect(() => { phaseRef.current       = phase },          [phase])
   useEffect(() => { timeLeftRef.current    = timeLeft },       [timeLeft])
   useEffect(() => { questionIdxRef.current = questionIndex },  [questionIndex])
 
-  // Network status listeners (Fixes silent network drops)
+  // Network status listeners
   useEffect(() => {
     const handleOnline = () => setIsOnline(true)
     const handleOffline = () => setIsOnline(false)
@@ -297,7 +302,7 @@ export default function Interview({ email, onComplete }) {
           
           const vRecorder = new MediaRecorder(stream, {
             mimeType: vMime,
-            videoBitsPerSecond: 250000, 
+            videoBitsPerSecond: 500000, // Bumped to 500kbps for better quality
           })
           
           videoChunksRef.current = []
@@ -332,6 +337,7 @@ export default function Interview({ email, onComplete }) {
 
   // ---- Pre-load voices, cache them in ref, and unlock browser audio ----
   useEffect(() => {
+    if (!window.speechSynthesis) return
     const synth = window.speechSynthesis
 
     const cacheVoices = () => {
@@ -468,6 +474,10 @@ export default function Interview({ email, onComplete }) {
       setStatusLabel('Almost there! Large video files take a bit longer on slower networks. Thank you for your patience.')
     }, 90000) 
 
+    const messageTimer3 = setTimeout(() => {
+      setStatusLabel('Still uploading. Your video has been recorded and is safe — this is just a slow upload. Please keep this page open.')
+    }, 150000)
+
     try {
       const uploadTimeout = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('timeout')), 240000)
@@ -479,6 +489,7 @@ export default function Interview({ email, onComplete }) {
 
     clearTimeout(messageTimer1)
     clearTimeout(messageTimer2)
+    clearTimeout(messageTimer3)
 
     try {
       await fetch('/api/complete-interview', {
@@ -499,9 +510,17 @@ export default function Interview({ email, onComplete }) {
   }, [email, onComplete, stopKeepAlive, uploadVideo])
 
   // =============================================
-  // TTS (BULLETPROOFED WITH TIMEOUTS)
+  // TTS (BULLETPROOFED WITH TIMEOUTS & GUARDS)
   // =============================================
   const speakText = useCallback((text, onEndCallback = null) => {
+    // Guard for old browsers
+    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
+      if (onEndCallback) { onEndCallback(); return; }
+      setPhase('waiting')
+      setStatusLabel('Voice not supported. Press the mic to answer.')
+      return
+    }
+
     const synth = window.speechSynthesis
     try { synth.cancel() } catch {}
     
@@ -513,7 +532,9 @@ export default function Interview({ email, onComplete }) {
 
     const spokenText = makePronounceable(text)
     const utterance  = new SpeechSynthesisUtterance(spokenText)
-    utterance.rate   = 0.95
+    
+    // Use the platform-specific TTS_RATE constant
+    utterance.rate   = TTS_RATE
     utterance.pitch  = 0.95
     utterance.volume = 1.0
 
@@ -534,7 +555,14 @@ export default function Interview({ email, onComplete }) {
         onEndCallback(); 
         return; 
       }
-      if (phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
+      
+      if (skipRequestedRef.current) {
+        skipRequestedRef.current = false;
+        if (phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
+          setPhase('waiting')
+          setStatusLabel('Voice skipped. Your turn, press the mic to answer.')
+        }
+      } else if (phaseRef.current !== 'ending' && phaseRef.current !== 'ended') {
         setPhase('waiting')
         setStatusLabel('Your turn, press the mic or Spacebar to answer')
       }
@@ -548,8 +576,7 @@ export default function Interview({ email, onComplete }) {
       safeResolve();
     }
 
-    // THE FIX: Hard timeout fallback. 80ms per character + 3s buffer.
-    // If old Chromebook crashes, this forces the app to un-freeze.
+    // Hard timeout fallback. 80ms per character + 3s buffer.
     const timeoutMs = Math.max(5000, text.length * 80);
     ttsTimeoutRef.current = setTimeout(safeResolve, timeoutMs);
 
@@ -758,7 +785,11 @@ export default function Interview({ email, onComplete }) {
       setMessages(withReply)
       messagesRef.current = withReply
       setCurrentAiText(safeReply)
-      setQuestionIndex(q => Math.min(q + 1, 5))
+      
+      // Fix: Only increment progress dots if it's an actual question
+      if (safeReply.includes('?')) {
+        setQuestionIndex(q => Math.min(q + 1, 5))
+      }
 
       if (isEnding) {
         speakText(safeReply, () => completeInterviewNow())
@@ -776,11 +807,16 @@ export default function Interview({ email, onComplete }) {
     }
   }, [speakText, completeInterviewNow])
 
+  // Start interview & Keepalive
   useEffect(() => {
     if (needsFullscreen) return
+    startKeepAlive() // Fix: Actually start the keepalive for iOS
     const t = setTimeout(() => callAI('START_INTERVIEW', []), 900)
-    return () => clearTimeout(t)
-  }, [callAI, needsFullscreen])
+    return () => {
+      clearTimeout(t)
+      stopKeepAlive()
+    }
+  }, [callAI, needsFullscreen, startKeepAlive, stopKeepAlive])
 
   // =============================================
   // MIC
@@ -935,14 +971,10 @@ export default function Interview({ email, onComplete }) {
     return () => window.removeEventListener('keydown', handler)
   }, [phase, startListening, stopListening])
 
-  // Allow user to manually skip TTS if it lags or breaks
+  // Fix: Clean skipTTS implementation using ref to avoid race condition
   const skipTTS = useCallback(() => {
+    skipRequestedRef.current = true
     try { window.speechSynthesis?.cancel() } catch {}
-    if (ttsTimeoutRef.current) clearTimeout(ttsTimeoutRef.current);
-    ttsActiveRef.current = false;
-    utteranceRef.current = null;
-    setPhase('waiting')
-    setStatusLabel('Skipped voice. Your turn, press the mic to answer.')
   }, [])
 
   const canInteract = phase === 'waiting'
